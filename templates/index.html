@@ -131,7 +131,8 @@ $("send").onclick = async ()=>{
     if(imageLocalURL){
         appendMsg('![]( '+imageLocalURL+' )','user');
     }
-
+    //清空text输入框
+    document.getElementById("text").value = "";
     /* ---- 请求后端 ---- */
     $("send").disabled = true;
     try{

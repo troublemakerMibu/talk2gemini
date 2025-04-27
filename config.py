@@ -18,8 +18,8 @@ _yaml = load_yaml()
 # ============ 供外部直接 import 使用 =============
 API_KEY        = os.getenv("GEMINI_KEY") or _yaml.get("api_key")
 MODEL_BASE_URL = _yaml["url"]
-THRESHOLD_KB   = int(_yaml.get("threshold_kb", 3600))
-PORT           = int(_yaml.get("port", 7860))
-
+THRESHOLD_KB   = int(_yaml.get("threshold_kb"))
+PORT           = int(_yaml.get("port"))
+BASE_PROMPT    = _yaml.get("base_prompt")
 if not API_KEY:
     raise RuntimeError("请在 .env 中设置 GEMINI_KEY 或在 config.yaml 中写 api_key")

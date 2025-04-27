@@ -8,7 +8,7 @@ import base64
 import io
 from flask import Flask, render_template, request, jsonify, send_from_directory
 from PIL import Image
-from config import API_KEY, MODEL_BASE_URL, THRESHOLD_KB, PORT
+from config import API_KEY, MODEL_BASE_URL, THRESHOLD_KB, PORT, BASE_PROMPT
 URL = f"{MODEL_BASE_URL}?key={API_KEY}"
 # compress_threshold_kb 用 THRESHOLD_KB
 
@@ -158,6 +158,8 @@ def chat():
 
     # -------- 组装 user 消息 --------
     parts = []
+    if not chat_history:
+        parts.append({'text': BASE_PROMPT})
     if text:
         parts.append({'text': text})
     if img_b64:
