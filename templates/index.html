@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>本地对话</title>
+{% raw %}
+<style>
+body{margin:0;padding-bottom:140px;font-family:Arial,Helvetica,sans-serif;background:#f5f7fa;}
+#history{padding:15px;overflow-y:auto;max-height:calc(100vh - 140px);}
+.msg{max-width:70%;padding:10px 14px;margin:8px 0;border-radius:8px;line-height:1.55;word-break:break-word;}
+.user{background:#0084ff;color:#fff;margin-left:auto;}
+.bot {background:#e6e6e6;color:#111;margin-right:auto;}
+.msg img{max-width:260px;border-radius:6px;margin-top:6px;}
+#bar{position:fixed;bottom:0;left:0;right:0;background:#fff;border-top:1px solid #ddd;display:flex;align-items:center;gap:8px;padding:10px 8px;z-index:10;}
+#bar input[type=text]{flex:1;font-size:16px;padding:8px 10px;border:1px solid #ccc;border-radius:6px;}
+#bar button{padding:8px 14px;font-size:15px;}
+#preview{max-height:160px;max-width:160px;border:1px solid #888;border-radius:6px;display:none;margin-left:6px;}
+pre{white-space:pre-wrap;}
+{% endraw %}
+</style>
+
+<!-- marked CDN，如访问不了可换本地文件 -->
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script>
+/* marked 兼容 / 容错 */
+function md2html(txt){
+  if (window.marked){
+      if (typeof marked.parse==='function') return marked.parse(txt);
+      if (typeof marked      ==='function') return marked(txt);
+  }
+  return txt.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/\n/g,"<br>");
+}
+</script>
+</head>
+<body>
+<div id="history"></div>
+
+<div id="bar">
+  <input type="file" accept="image/*" id="pick" style="display:none">
+  <button   id="pickBtn">选择图片</button>
+  <button   id="shotBtn">屏幕截图</button>
+  <input    type="text"  id="text" placeholder="输入内容…">
+  <button   id="send">发送</button>
+  <button   id="newTopic" style="margin-left:auto;background:#f0f0f0">新话题</button>
+  <img      id="preview">
+</div>
+<!-- 点击图片后的放大预览 -->
+<div id="viewer" style="display:none;position:fixed;left:0;top:0;width:100%;height:100%;background:rgba(0,0,0,.7);z-index:999;
+                         align-items:center;justify-content:center;">
+  <img id="viewerImg" style="max-width:95vw;max-height:95vh;border-radius:6px;box-shadow:0 0 12px #000">
+</div>
+<script>
+const $ = id => document.getElementById(id);
+const historyBox   = $("history");
+let imageBase64    = null;  // 发送给后台的 b64
+let imageLocalURL  = null;  // 前端展示用的 dataURL
+
+/* -------------- 渲染历史（首次加载用） -------------- */
+async function loadHistory(){
+  const r   = await fetch('/history');
+  const arr = await r.json();
+  historyBox.innerHTML = '';
+  arr.forEach(obj=>{
+      const div = document.createElement('div');
+      div.className = 'msg '+(obj.who==='user'?'user':'bot');
+      div.innerHTML = md2html(obj.md);
+      historyBox.appendChild(div);
+  });
+  historyBox.scrollTop = historyBox.scrollHeight;
+}
+loadHistory();
+
+/* -------------- 工具函数 -------------- */
+function appendMsg(md, who){
+  const div = document.createElement('div');
+  div.className = 'msg '+who;
+  div.innerHTML = md2html(md);
+  historyBox.appendChild(div);
+  historyBox.scrollTop = historyBox.scrollHeight;
+}
+function resetInputArea(){
+  $("text").value = '';
+  $("pick").value = '';
+  imageBase64   = null;
+  imageLocalURL = null;
+  $("preview").style.display='none';
+}
+
+/* -------------- 事件绑定 -------------- */
+// 1) 选择图片
+$("pickBtn").onclick = ()=> $("pick").click();
+$("pick").onchange   = e=>{
+    const f = e.target.files[0]; if(!f) return;
+    const rd = new FileReader();
+    rd.onload = ev=>{
+        imageLocalURL = ev.target.result;
+        imageBase64   = imageLocalURL.split(',')[1];
+        $("preview").src = imageLocalURL;
+        $("preview").style.display='block';
+    };
+    rd.readAsDataURL(f);
+};
+
+// 2) 截图
+$("shotBtn").onclick = async ()=>{
+    $("shotBtn").disabled = true;
+    const r  = await fetch('/screenshot',{method:'POST'});
+    $("shotBtn").disabled = false;
+    const js = await r.json();
+    if(js.img){
+        imageBase64   = js.img;
+        imageLocalURL = 'data:image/png;base64,'+js.img;
+        $("preview").src   = imageLocalURL;
+        $("preview").style.display='block';
+    }else{
+        alert("截图失败或取消");
+    }
+};
+
+// 3) 发送
+$("send").onclick = async ()=>{
+    const txt = $("text").value.trim();
+    if(!txt && !imageBase64){
+        alert("请输入内容或添加图片/截图");
+        return;
+    }
+
+    /* ---- 前端立即回显 ---- */
+    let mdUser = '**你：**\n'+txt;
+    appendMsg(mdUser,'user');
+    if(imageLocalURL){
+        appendMsg('![]( '+imageLocalURL+' )','user');
+    }
+
+    /* ---- 请求后端 ---- */
+    $("send").disabled = true;
+    try{
+        const r  = await fetch('/chat',{
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({text: txt, image: imageBase64})
+        });
+        const js = await r.json();
+        appendMsg('**人工智能：**\n'+js.answer,'bot');
+    }catch(err){
+        console.error(err);
+        alert("请求失败！");
+    }
+    $("send").disabled = false;
+    resetInputArea();          // ① 发送后清空输入区（需求 1）
+};
+
+// 4) 新话题
+$("newTopic").onclick = async ()=>{
+    if(!confirm("确定要开启新话题？这会清空全部对话。")) return;
+    await fetch('/reset',{method:'POST'});
+    historyBox.innerHTML='';
+    resetInputArea();
+};
+/* ---------- 预览放大 ---------- */
+$("preview").onclick = ()=> openViewer(imageLocalURL);
+historyBox.addEventListener('click',e=>{
+    if(e.target.tagName==='IMG'){        // 点击聊天记录中的图片
+        openViewer(e.target.src);
+    }
+});
+$("viewer").onclick = ()=> $("viewer").style.display='none';
+
+function openViewer(src){
+    if(!src) return;
+    $("viewerImg").src = src;
+    $("viewer").style.display='flex';
+}
+</script>
+</body>
+</html>

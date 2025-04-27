@@ -1,0 +1,3 @@
+url        : "GEMINI_BASE_URL"
+threshold_kb: "THRESHOLD_KB "       # 图片压缩阈值
+port       : "PORT"
