@@ -1,3 +1,8 @@
-url        : "GEMINI_BASE_URL"
+base_url        : "GEMINI_BASE_URL"
 threshold_kb: "THRESHOLD_KB "       # 图片压缩阈值
 port       : "PORT"
+models:                    # 模型列表
+  - "GEMINI_MODEL_1"
+  - "GEMINI_MODEL_2"
+api_key: "API_KEY"
+base_prompt: "BASE_PROMPT"  # 系统提示此

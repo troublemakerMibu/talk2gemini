@@ -7,10 +7,9 @@ import requests
 import base64
 import io
 from flask import Flask, render_template, request, jsonify, send_from_directory
+from config import API_KEY, MODEL_BASE_URL, PORT, BASE_PROMPT, MODELS
 from PIL import Image
-from config import API_KEY, MODEL_BASE_URL, THRESHOLD_KB, PORT, BASE_PROMPT
-URL = f"{MODEL_BASE_URL}?key={API_KEY}"
-# compress_threshold_kb 用 THRESHOLD_KB
+
 
 # ----------------- 基础配置 -----------------
 HEADERS = {"Content-Type": "application/json"}
@@ -27,11 +26,13 @@ def reset():
     chat_history.clear()
     return jsonify({'ok': True})
 # ----------------- 调用大模型 -----------------
-def call_gemini(history):
-    resp = requests.post(URL, headers=HEADERS, json={"contents": history}, timeout=60)
+def call_gemini(history, model):
+    url = f"{MODEL_BASE_URL}{model}:generateContent?key={API_KEY}"
+    resp = requests.post(url, headers=HEADERS, json={"contents": history}, timeout=60)
     if resp.status_code == 200:
         return resp.json()['candidates'][0]['content']['parts'][0]['text']
     raise RuntimeError(f'Gemini Error {resp.status_code}: {resp.text[:200]}')
+
 
 # ----------------- 图片压缩（> 3.6 MB 自动压） -----------------
 def maybe_compress_image(b64, target_kb=3600):
@@ -120,7 +121,7 @@ def grab_screen_interactive():
 # ----------------- Flask 路由 -----------------
 @app.route('/')
 def index():
-    return render_template('index.html')
+    return render_template('index.html', models=MODELS)
 
 @app.route('/history')
 def history():
@@ -147,11 +148,12 @@ def history():
 @app.route('/chat', methods=['POST'])
 def chat():
     """
-    data = {text: str, image: base64 or null}
+    data = {text: str, image: base64 or null, model: str}
     """
     data = request.get_json(force=True)
     text  = (data.get('text') or '').strip()
     img_b64 = data.get('image')          # 可能为空
+    model = data.get('model', MODELS[0])  # 默认使用第一个模型
 
     if not text and not img_b64:
         return jsonify({'error': 'empty'}), 400
@@ -171,7 +173,7 @@ def chat():
 
     # -------- 调 LLM --------
     try:
-        answer = call_gemini(chat_history)
+        answer = call_gemini(chat_history, model)  # 传递模型参数
     except Exception as e:
         answer = f"出错了：{e}"
 
@@ -179,6 +181,7 @@ def chat():
     bot_msg = {'role': 'model', 'parts': [{'text': answer}]}
     chat_history.append(bot_msg)
     return jsonify({'answer': answer})
+
 
 @app.route('/screenshot', methods=['POST'])
 def screenshot():
@@ -190,4 +193,4 @@ def screenshot():
 # ----------------- 主入口 -----------------
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-    app.run(debug=True, threaded=True, port=PORT, host='127.0.0.1')
+    app.run(debug=False, threaded=True, port=PORT, host='127.0.0.1')

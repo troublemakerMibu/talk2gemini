@@ -34,16 +34,21 @@ function md2html(txt){
 </head>
 <body>
 <div id="history"></div>
-
 <div id="bar">
+  <select id="modelSelect">
+    {% for model in models %}
+      <option value="{{ model }}">{{ model }}</option>
+    {% endfor %}
+  </select>
   <input type="file" accept="image/*" id="pick" style="display:none">
-  <button   id="pickBtn">选择图片</button>
-  <button   id="shotBtn">屏幕截图</button>
-  <input    type="text"  id="text" placeholder="输入内容…">
-  <button   id="send">发送</button>
-  <button   id="newTopic" style="margin-left:auto;background:#f0f0f0">新话题</button>
-  <img      id="preview">
+  <button id="pickBtn">选择图片</button>
+  <button id="shotBtn">屏幕截图</button>
+  <input type="text" id="text" placeholder="输入内容…">
+  <button id="send">发送</button>
+  <button id="newTopic" style="margin-left:auto;background:#f0f0f0">新话题</button>
+  <img id="preview">
 </div>
+
 <!-- 点击图片后的放大预览 -->
 <div id="viewer" style="display:none;position:fixed;left:0;top:0;width:100%;height:100%;background:rgba(0,0,0,.7);z-index:999;
                          align-items:center;justify-content:center;">
@@ -133,13 +138,16 @@ $("send").onclick = async ()=>{
     }
     //清空text输入框
     document.getElementById("text").value = "";
+    //清空preview预览图
+    document.getElementById("preview").style.display='none';
     /* ---- 请求后端 ---- */
     $("send").disabled = true;
     try{
+        const model = $("modelSelect").value;  // 获取选择的模型
         const r  = await fetch('/chat',{
             method:'POST',
             headers:{'Content-Type':'application/json'},
-            body: JSON.stringify({text: txt, image: imageBase64})
+            body: JSON.stringify({text: txt, image: imageBase64, model: model})  // 传递模型参数
         });
         const js = await r.json();
         appendMsg('**人工智能：**\n'+js.answer,'bot');
@@ -150,6 +158,7 @@ $("send").onclick = async ()=>{
     $("send").disabled = false;
     resetInputArea();          // ① 发送后清空输入区（需求 1）
 };
+
 
 // 4) 新话题
 $("newTopic").onclick = async ()=>{
