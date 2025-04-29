@@ -1,4 +1,4 @@
-import os, yaml, pathlib
+import yaml, pathlib
 
 BASE_DIR = pathlib.Path(__file__).resolve().parent
 CFG_PATH = BASE_DIR / "config.yaml"
@@ -19,4 +19,4 @@ PORT           = int(_yaml.get("port"))
 BASE_PROMPT    = _yaml.get("base_prompt")
 MODELS         = _yaml.get("models", [])  # 读取模型列表
 if not API_KEY:
-    raise RuntimeError("请在 .env 中设置 GEMINI_KEY 或在 config.yaml 中写 api_key")
+    raise RuntimeError("请配置api_key")

@@ -11,7 +11,19 @@ body{margin:0;padding-bottom:140px;font-family:Arial,Helvetica,sans-serif;backgr
 .user{background:#0084ff;color:#fff;margin-left:auto;}
 .bot {background:#e6e6e6;color:#111;margin-right:auto;}
 .msg img{max-width:260px;border-radius:6px;margin-top:6px;}
-#bar{position:fixed;bottom:0;left:0;right:0;background:#fff;border-top:1px solid #ddd;display:flex;align-items:center;gap:8px;padding:10px 8px;z-index:10;}
+#bar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: #fff;
+  border-top: 1px solid #ddd;
+  display: flex;
+  align-items: center;
+  gap: 8px; /* 增加一点间距 */
+  padding: 10px 8px;
+  z-index: 10;
+}
 #bar input[type=text]{flex:1;font-size:16px;padding:8px 10px;border:1px solid #ccc;border-radius:6px;}
 #bar button{padding:8px 14px;font-size:15px;}
 #preview{max-height:160px;max-width:160px;border:1px solid #888;border-radius:6px;display:none;margin-left:6px;}
@@ -44,6 +56,10 @@ function md2html(txt){
   <button id="pickBtn">选择图片</button>
   <button id="shotBtn">屏幕截图</button>
   <input type="text" id="text" placeholder="输入内容…">
+  <label style="display: flex; align-items: center; gap: 5px;">
+  <input type="checkbox" id="enableSearch" />
+  联网搜索
+  </label>
   <button id="send">发送</button>
   <button id="newTopic" style="margin-left:auto;background:#f0f0f0">新话题</button>
   <img id="preview">
@@ -129,6 +145,8 @@ $("send").onclick = async ()=>{
         alert("请输入内容或添加图片/截图");
         return;
     }
+    // 获取开关状态
+    const enableSearch = $("enableSearch").checked;
 
     /* ---- 前端立即回显 ---- */
     let mdUser = '**你：**\n'+txt;
@@ -147,7 +165,7 @@ $("send").onclick = async ()=>{
         const r  = await fetch('/chat',{
             method:'POST',
             headers:{'Content-Type':'application/json'},
-            body: JSON.stringify({text: txt, image: imageBase64, model: model})  // 传递模型参数
+            body: JSON.stringify({text: txt, image: imageBase64, model: model, enable_search: enableSearch})  // 传递模型参数
         });
         const js = await r.json();
         appendMsg('**人工智能：**\n'+js.answer,'bot');

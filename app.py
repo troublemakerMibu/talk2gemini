@@ -26,12 +26,16 @@ def reset():
     chat_history.clear()
     return jsonify({'ok': True})
 # ----------------- 调用大模型 -----------------
-def call_gemini(history, model):
+def call_gemini(history, model, tools=None):
     url = f"{MODEL_BASE_URL}{model}:generateContent?key={API_KEY}"
-    resp = requests.post(url, headers=HEADERS, json={"contents": history}, timeout=60)
+    payload = {"contents": history}
+    if tools:
+        payload["tools"] = tools  # 动态添加 tools 字段
+    resp = requests.post(url, headers=HEADERS, json=payload, timeout=60)
     if resp.status_code == 200:
         return resp.json()['candidates'][0]['content']['parts'][0]['text']
     raise RuntimeError(f'Gemini Error {resp.status_code}: {resp.text[:200]}')
+
 
 
 # ----------------- 图片压缩（> 3.6 MB 自动压） -----------------
@@ -151,6 +155,8 @@ def chat():
     data = {text: str, image: base64 or null, model: str}
     """
     data = request.get_json(force=True)
+    enable_search = data.get('enable_search', False)
+    tools = [{"google_search": {}}] if enable_search else None
     text  = (data.get('text') or '').strip()
     img_b64 = data.get('image')          # 可能为空
     model = data.get('model', MODELS[0])  # 默认使用第一个模型
@@ -173,7 +179,7 @@ def chat():
 
     # -------- 调 LLM --------
     try:
-        answer = call_gemini(chat_history, model)  # 传递模型参数
+        answer = call_gemini(chat_history, model, tools)  # 传递模型参数
     except Exception as e:
         answer = f"出错了：{e}"
 
@@ -194,3 +200,4 @@ def screenshot():
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     app.run(debug=False, threaded=True, port=PORT, host='127.0.0.1')
+
