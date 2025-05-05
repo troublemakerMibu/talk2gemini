@@ -2,9 +2,10 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<title>本地对话</title>
+<title>本地对话 (流式)</title>
 {% raw %}
 <style>
+/* ... CSS 样式不变 ... */
 body{margin:0;padding-bottom:140px;font-family:Arial,Helvetica,sans-serif;background:#f5f7fa;}
 #history{padding:15px;overflow-y:auto;max-height:calc(100vh - 140px);}
 .msg{max-width:70%;padding:10px 14px;margin:8px 0;border-radius:8px;line-height:1.55;word-break:break-word;}
@@ -28,8 +29,12 @@ body{margin:0;padding-bottom:140px;font-family:Arial,Helvetica,sans-serif;backgr
 #bar button{padding:8px 14px;font-size:15px;}
 #preview{max-height:160px;max-width:160px;border:1px solid #888;border-radius:6px;display:none;margin-left:6px;}
 pre{white-space:pre-wrap;}
-{% endraw %}
+.thinking { /* 添加一个简单的思考中样式 */
+    color: #888;
+    font-style: italic;
+}
 </style>
+{% endraw %}
 
 <!-- marked CDN，如访问不了可换本地文件 -->
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
@@ -37,10 +42,20 @@ pre{white-space:pre-wrap;}
 /* marked 兼容 / 容错 */
 function md2html(txt){
   if (window.marked){
+      // 使用 GFM 和 breaks 选项获得类似 GitHub 的 Markdown 渲染效果
+      marked.setOptions({
+          gfm: true,
+          breaks: true, // 将换行符渲染为 <br>
+          // sanitize: true // 注意：如果需要严格的安全过滤，请启用并配置
+      });
       if (typeof marked.parse==='function') return marked.parse(txt);
       if (typeof marked      ==='function') return marked(txt);
   }
-  return txt.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/\n/g,"<br>");
+  // 备用：简单的 HTML 转义和换行处理
+  return txt.replace(/&/g,"&amp;")
+            .replace(/</g,"&lt;")
+            .replace(/>/g,"&gt;")
+            .replace(/\n/g,"<br>");
 }
 </script>
 </head>
@@ -48,6 +63,7 @@ function md2html(txt){
 <div id="history"></div>
 <div id="bar">
   <select id="modelSelect">
+    <!-- 模型选项将由 Flask 模板引擎填充 -->
     {% for model in models %}
       <option value="{{ model }}">{{ model }}</option>
     {% endfor %}
@@ -75,36 +91,52 @@ const $ = id => document.getElementById(id);
 const historyBox   = $("history");
 let imageBase64    = null;  // 发送给后台的 b64
 let imageLocalURL  = null;  // 前端展示用的 dataURL
+let currentEventSource = null; // 用于存储当前的 EventSource 连接
 
 /* -------------- 渲染历史（首次加载用） -------------- */
 async function loadHistory(){
-  const r   = await fetch('/history');
-  const arr = await r.json();
-  historyBox.innerHTML = '';
-  arr.forEach(obj=>{
-      const div = document.createElement('div');
-      div.className = 'msg '+(obj.who==='user'?'user':'bot');
-      div.innerHTML = md2html(obj.md);
-      historyBox.appendChild(div);
-  });
-  historyBox.scrollTop = historyBox.scrollHeight;
+  try {
+    const r   = await fetch('/history');
+    if (!r.ok) throw new Error(`HTTP error! status: ${r.status}`);
+    const arr = await r.json();
+    historyBox.innerHTML = '';
+    arr.forEach(obj=>{
+        appendMsg(obj.md, obj.who, false); // 初始加载不滚动
+    });
+    historyBox.scrollTop = historyBox.scrollHeight; // 加载完再滚动到底部
+  } catch (error) {
+      console.error("加载历史记录失败:", error);
+      historyBox.innerHTML = '<div class="msg bot">加载历史记录失败，请刷新页面或检查后端服务。</div>';
+  }
 }
 loadHistory();
 
 /* -------------- 工具函数 -------------- */
-function appendMsg(md, who){
+// 修改 appendMsg 以接受一个可选的滚动参数，并返回创建的 div
+function appendMsg(md, who, shouldScroll = true, isThinking = false) {
   const div = document.createElement('div');
-  div.className = 'msg '+who;
-  div.innerHTML = md2html(md);
+  div.className = 'msg ' + who;
+  if (isThinking) {
+      div.classList.add('thinking'); // 添加思考中样式
+      div.innerHTML = md; // 直接显示文本，不经过 markdown 解析
+  } else {
+      div.innerHTML = md2html(md); // 解析 markdown
+  }
   historyBox.appendChild(div);
-  historyBox.scrollTop = historyBox.scrollHeight;
+  if (shouldScroll) {
+      historyBox.scrollTop = historyBox.scrollHeight;
+  }
+  return div; // 返回创建的元素
 }
+
 function resetInputArea(){
   $("text").value = '';
-  $("pick").value = '';
+  $("pick").value = ''; // 清空文件选择器的值
   imageBase64   = null;
   imageLocalURL = null;
+  $("preview").src = ''; // 清空预览图源
   $("preview").style.display='none';
+  $("text").focus(); // 发送后重新聚焦输入框
 }
 
 /* -------------- 事件绑定 -------------- */
@@ -125,80 +157,192 @@ $("pick").onchange   = e=>{
 // 2) 截图
 $("shotBtn").onclick = async ()=>{
     $("shotBtn").disabled = true;
-    const r  = await fetch('/screenshot',{method:'POST'});
-    $("shotBtn").disabled = false;
-    const js = await r.json();
-    if(js.img){
-        imageBase64   = js.img;
-        imageLocalURL = 'data:image/png;base64,'+js.img;
-        $("preview").src   = imageLocalURL;
-        $("preview").style.display='block';
-    }else{
-        alert("截图失败或取消");
+    $("shotBtn").textContent = '截图中...'; // 提供反馈
+    try {
+        const r  = await fetch('/screenshot',{method:'POST'});
+        const js = await r.json();
+        if(js.img){
+            imageBase64   = js.img;
+            imageLocalURL = 'data:image/png;base64,'+js.img;
+            $("preview").src   = imageLocalURL;
+            $("preview").style.display='block';
+        } else if (r.status !== 500) { // 500 通常是截图失败或取消
+             alert("截图失败或用户取消");
+        }
+    } catch (err) {
+        console.error("截图请求失败:", err);
+        alert("截图功能出错");
+    } finally {
+        $("shotBtn").disabled = false;
+        $("shotBtn").textContent = '屏幕截图';
     }
 };
 
-// 3) 发送
+// 3) 发送 (核心修改处)
 $("send").onclick = async ()=>{
     const txt = $("text").value.trim();
     if(!txt && !imageBase64){
         alert("请输入内容或添加图片/截图");
         return;
     }
-    // 获取开关状态
-    const enableSearch = $("enableSearch").checked;
 
-    /* ---- 前端立即回显 ---- */
-    let mdUser = '**你：**\n'+txt;
-    appendMsg(mdUser,'user');
-    if(imageLocalURL){
-        appendMsg('![]( '+imageLocalURL+' )','user');
+    // 如果当前有流在进行，阻止新的发送 (可选，但推荐)
+    if (currentEventSource && currentEventSource.readyState !== EventSource.CLOSED) {
+        alert("请等待当前回复完成后再发送新消息。");
+        return;
     }
-    //清空text输入框
-    document.getElementById("text").value = "";
-    //清空preview预览图
-    document.getElementById("preview").style.display='none';
-    /* ---- 请求后端 ---- */
+
+
+    const model = $("modelSelect").value;
+    const enableSearch = $("enableSearch").checked;
+    const userTextToSend = txt; // 保存要发送的文本
+    const userImageToSend = imageBase64; // 保存要发送的图片
+    const userImageLocalURL = imageLocalURL; // 保存用于显示的图片 URL
+
+    /* ---- 前端立即回显用户消息 ---- */
+    let mdUser = '**你：**\n' + userTextToSend;
+    appendMsg(mdUser,'user');
+    if(userImageLocalURL){
+        // 直接插入 <img> 标签，避免 markdown 解析延迟或问题
+        const imgDiv = document.createElement('div');
+        imgDiv.className = 'msg user'; // 保持样式一致
+        imgDiv.style.padding = '0'; // 图片消息通常不需要内边距
+        imgDiv.innerHTML = `<img src="${userImageLocalURL}" alt="用户上传图片" style="max-width:260px; border-radius:6px; margin-top:6px; display: block; margin-left: auto;">`; // 图片靠右
+        historyBox.appendChild(imgDiv);
+        historyBox.scrollTop = historyBox.scrollHeight;
+    }
+
+    resetInputArea(); // 发送后立即清空输入区
     $("send").disabled = true;
-    try{
-        const model = $("modelSelect").value;  // 获取选择的模型
-        const r  = await fetch('/chat',{
+    $("send").textContent = '等待中...'; // 提供反馈
+
+    /* ---- 第一步: POST 用户消息到 /chat ---- */
+    try {
+        const r = await fetch('/chat', {
             method:'POST',
             headers:{'Content-Type':'application/json'},
-            body: JSON.stringify({text: txt, image: imageBase64, model: model, enable_search: enableSearch})  // 传递模型参数
+            body: JSON.stringify({text: userTextToSend, image: userImageToSend}) // 只发送用户数据
         });
+        if (!r.ok) {
+            const errData = await r.json().catch(() => ({error: '无法解析错误信息'}));
+            throw new Error(`服务器错误: ${r.status} - ${errData.error || '未知错误'}`);
+        }
         const js = await r.json();
-        appendMsg('**人工智能：**\n'+js.answer,'bot');
-    }catch(err){
-        console.error(err);
-        alert("请求失败！");
+        if (!js.ok) {
+            throw new Error("服务器未能成功处理用户消息");
+        }
+
+        /* ---- 第二步: 连接到 /stream 获取流式响应 ---- */
+        // 创建一个空的 bot 消息 div，用于填充流式内容
+        const botMsgDiv = appendMsg('**人工智能：**\n<span class="thinking">正在思考...</span>', 'bot', true, true); // 初始显示思考中
+        let accumulatedMd = '**人工智能：**\n'; // 用于累积 Markdown 文本
+        let isFirstChunk = true;
+
+        // 构建带参数的 SSE URL
+        const streamUrl = `/stream?model=${encodeURIComponent(model)}&enable_search=${enableSearch}`;
+        currentEventSource = new EventSource(streamUrl);
+
+        currentEventSource.onmessage = function(event) {
+            try {
+                const chunkData = JSON.parse(event.data);
+                if (isFirstChunk) {
+                    // 收到第一个数据块，移除“思考中”提示
+                    botMsgDiv.classList.remove('thinking');
+                    accumulatedMd = '**人工智能：**\n'; // 重置，准备接收真实内容
+                    isFirstChunk = false;
+                }
+                accumulatedMd += chunkData.text; // 累加文本块
+                botMsgDiv.innerHTML = md2html(accumulatedMd); // 实时更新 Markdown 渲染结果
+                historyBox.scrollTop = historyBox.scrollHeight; // 保持滚动到底部
+            } catch (e) {
+                console.error("解析 SSE 数据块失败:", e, "数据:", event.data);
+                // 可以选择在 botMsgDiv 中显示错误
+                botMsgDiv.innerHTML += "<br>[数据解析错误]";
+            }
+        };
+
+        currentEventSource.addEventListener('end', function(event) {
+            console.log("Stream ended:", event.data);
+            closeStream();
+        });
+
+        currentEventSource.onerror = function(err) {
+            console.error("EventSource failed:", err);
+            if (isFirstChunk) { // 如果在收到任何数据前就出错
+                 botMsgDiv.innerHTML = md2html(accumulatedMd + '\n\n[连接错误或流中断]');
+                 botMsgDiv.classList.remove('thinking');
+            } else {
+                 botMsgDiv.innerHTML = md2html(accumulatedMd + '\n\n[连接错误或流中断]');
+            }
+            closeStream();
+        };
+
+    } catch(err) {
+        console.error("发送消息或连接流失败:", err);
+        appendMsg(`**错误：**\n无法发送消息或连接到流服务。\n${err.message}`, 'bot');
+        $("send").disabled = false; // 出错时也要恢复按钮
+        $("send").textContent = '发送';
     }
-    $("send").disabled = false;
-    resetInputArea();          // ① 发送后清空输入区（需求 1）
 };
+
+// 封装关闭流的逻辑
+function closeStream() {
+    if (currentEventSource) {
+        currentEventSource.close();
+        currentEventSource = null;
+        console.log("EventSource closed.");
+    }
+    $("send").disabled = false; // 恢复发送按钮
+    $("send").textContent = '发送';
+    // 可以在这里做一些流结束后的清理工作
+}
 
 
 // 4) 新话题
 $("newTopic").onclick = async ()=>{
-    if(!confirm("确定要开启新话题？这会清空全部对话。")) return;
-    await fetch('/reset',{method:'POST'});
-    historyBox.innerHTML='';
-    resetInputArea();
+    if (currentEventSource && currentEventSource.readyState !== EventSource.CLOSED) {
+        if (!confirm("当前回复仍在进行中，确定要强制开启新话题吗？")) return;
+        closeStream(); // 强制关闭当前流
+    } else {
+        if (!confirm("确定要开启新话题？这会清空全部对话。")) return;
+    }
+
+    try {
+        await fetch('/reset',{method:'POST'});
+        historyBox.innerHTML='';
+        resetInputArea();
+        console.log("新话题已开启");
+    } catch (err) {
+        console.error("重置会话失败:", err);
+        alert("开启新话题失败，请检查后端服务。");
+    }
 };
+
 /* ---------- 预览放大 ---------- */
 $("preview").onclick = ()=> openViewer(imageLocalURL);
 historyBox.addEventListener('click',e=>{
-    if(e.target.tagName==='IMG'){        // 点击聊天记录中的图片
+    if(e.target.tagName==='IMG'){
         openViewer(e.target.src);
     }
 });
 $("viewer").onclick = ()=> $("viewer").style.display='none';
 
 function openViewer(src){
-    if(!src) return;
+    if(!src || src.startsWith('data:image/png;base64,' + '...')) return; // 防止点击占位符
     $("viewerImg").src = src;
     $("viewer").style.display='flex';
 }
+
+// 添加 Enter 键发送功能
+$("text").addEventListener("keypress", function(event) {
+  // event.keyCode === 13 是 Enter 键
+  // !event.shiftKey 确保不是 Shift+Enter (通常用于换行)
+  if (event.key === "Enter" && !event.shiftKey) {
+    event.preventDefault(); // 阻止默认的 Enter 行为（如换行）
+    $("send").click(); // 触发发送按钮的点击事件
+  }
+});
+
 </script>
 </body>
 </html>

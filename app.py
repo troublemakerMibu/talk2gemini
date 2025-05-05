@@ -1,59 +1,112 @@
+import time
 import markdown2
-import pygetwindow as gw
+import pygetwindow as gw # 截图部分保持不变
 import pyautogui
 import tkinter as tk
 import requests
 import base64
 import io
-from flask import Flask, render_template, request, jsonify, send_from_directory
+import json # 确保导入 json
+from flask import Flask, Response, render_template, request, jsonify, send_from_directory, render_template_string # 引入 Response 和 render_template_string
 from config import API_KEY, MODEL_BASE_URL, PORT, BASE_PROMPT, MODELS
 from PIL import Image
-import json
-
 
 # ----------------- 基础配置 -----------------
 HEADERS = {"Content-Type": "application/json"}
 
 app = Flask(__name__, template_folder='templates')
-chat_history = []          # 直接保存成 Google Gemini 兼容格式（role / parts）
-
-
-
+chat_history = [] # 直接保存成 Google Gemini 兼容格式（role / parts）
+# 用于存储流式传输中积累的完整机器人回复
+current_bot_response_full = ""
 
 # ------- 在原有 Flask 路由后面加上两个新接口 --------
 @app.route('/reset', methods=['POST'])
 def reset():
+    global chat_history, current_bot_response_full
     chat_history.clear()
+    current_bot_response_full = "" # 重置时也清空
     return jsonify({'ok': True})
-# ----------------- 调用大模型 -----------------
-def call_gemini(history, model, tools=None):
-    url = f"{MODEL_BASE_URL}{model}:generateContent?key={API_KEY}"
+
+# ----------------- 调用大模型 (流式) -----------------
+def stream_gemini_response(history, model, tools=None):
+    """调用 Gemini 流式 API 并逐块返回内容"""
+    global current_bot_response_full
+    current_bot_response_full = "" # 开始新流时重置
+
+    # 注意：流式 API 的 URL 不同
+    # url = f"{STREAM_MODEL_BASE_URL}{API_KEY}&alt=sse" # 使用 streamGenerateContent 并指定 SSE 格式
+    url = f"{MODEL_BASE_URL}{model}:streamGenerateContent?alt=sse&key={API_KEY}" # 如果你的 BASE_URL 结构不同，可能需要这样拼
+
     payload = {"contents": history}
     if tools:
-        payload["tools"] = tools  # 动态添加 tools 字段
-    resp = requests.post(url, headers=HEADERS, json=payload, timeout=300)
-    if resp.status_code == 200:
-        response_data = resp.json()
-        candidates = response_data.get('candidates')
-        content = candidates[0].get('content')
-        parts_list = content.get('parts')
-        full_text_list = []
-        for part in parts_list:
-            # 确保 part 是字典并且包含 'text' 键
-            if isinstance(part, dict) and 'text' in part:
-                full_text_list.append(part['text'])
-            else:
-                # 可以选择忽略无效的 part 或记录日志
-                print(f"警告：parts 列表中的元素格式不符合预期: {part}")
-        full_text = "".join(full_text_list)
-        return full_text
-        # return resp.json()['candidates'][0]['content']['parts'][0]['text']
-    raise RuntimeError(f'Gemini Error {resp.status_code}: {resp.text[:200]}')
+        payload["tools"] = tools
 
+    try:
+        # 使用 stream=True 来获取流式响应
+        with requests.post(url, headers=HEADERS, json=payload, timeout=300, stream=True) as resp:
+            resp.raise_for_status() # 检查 HTTP 错误状态码
+
+            if 'text/event-stream' not in resp.headers.get('Content-Type', ''):
+                 # 如果响应不是 SSE，尝试读取并作为错误抛出
+                 error_text = resp.text
+                 print(f"错误：Gemini API 未返回 SSE 流。响应: {error_text[:500]}")
+                 yield f"event: error\ndata: Gemini API 未返回 SSE 流\n\n"
+                 # 记录错误到历史记录
+                 current_bot_response_full = f"Gemini API 错误：未返回 SSE 流。响应: {error_text[:200]}"
+                 return # 结束生成器
+
+            for line in resp.iter_lines():
+                if line:
+                    decoded_line = line.decode('utf-8')
+                    if decoded_line.startswith('data: '):
+                        try:
+                            # 移除 'data: ' 前缀并解析 JSON
+                            json_data = json.loads(decoded_line[len('data: '):])
+                            # 提取文本内容 (根据 Gemini 的实际 SSE 结构)
+                            # 假设结构是 {"candidates": [{"content": {"parts": [{"text": "..."}]}}]}
+                            text_chunk = json_data['candidates'][0]['content']['parts'][0]['text']
+                            current_bot_response_full += text_chunk # 累加完整回复
+                            # 发送 SSE 事件给前端
+                            # 我们直接发送文本块，前端处理更简单
+                            # 使用 json.dumps 确保特殊字符被正确转义
+                            yield f"data: {json.dumps({'text': text_chunk})}\n\n"
+                            time.sleep(0.01) # 轻微延迟，避免前端渲染卡顿 (可选)
+                        except (json.JSONDecodeError, KeyError, IndexError) as e:
+                            print(f"警告：解析 Gemini SSE 数据块失败: {e}, 行: {decoded_line}")
+                            # 可以选择忽略或发送错误信号
+                            # yield f"event: error\ndata: 解析数据块失败\n\n"
+                            pass # 暂时忽略解析错误的数据块
+
+    except requests.exceptions.RequestException as e:
+        print(f"Gemini API 请求错误: {e}")
+        error_message = f"请求 Gemini API 时出错: {e}"
+        current_bot_response_full = error_message # 记录错误
+        yield f"event: error\ndata: {json.dumps({'text': error_message})}\n\n"
+    except Exception as e:
+        print(f"处理流时发生未知错误: {e}")
+        error_message = f"处理流时发生未知错误: {e}"
+        current_bot_response_full = error_message # 记录错误
+        yield f"event: error\ndata: {json.dumps({'text': error_message})}\n\n"
+    finally:
+        # 流结束后，发送结束信号
+        yield f"event: end\ndata: [DONE]\n\n"
+        # !! 重要：在流结束后，将累积的完整回复添加到 history !!
+        if current_bot_response_full:
+             bot_msg = {'role': 'model', 'parts': [{'text': current_bot_response_full}]}
+             # 检查 chat_history 的最后一个消息是否是对应的 user 消息
+             # 这是一个简化处理，在高并发下可能有问题，但对于单用户本地应用通常足够
+             if chat_history and chat_history[-1]['role'] == 'user':
+                 chat_history.append(bot_msg)
+             else:
+                 # 如果历史记录状态不对，打印警告，但不添加，避免混乱
+                 print("警告：尝试在流结束后添加机器人回复，但历史记录状态不符合预期。")
+        else:
+             print("警告：流结束，但未生成任何有效内容。")
 
 
 # ----------------- 图片压缩（> 3.6 MB 自动压） -----------------
 def maybe_compress_image(b64, target_kb=3600):
+    # ... (代码不变) ...
     raw = base64.b64decode(b64)
     if len(raw) <= target_kb * 1024:
         return b64
@@ -69,18 +122,11 @@ def maybe_compress_image(b64, target_kb=3600):
 
 # ----------------- 截图（最小化浏览器 + 框选区域） -----------------
 def grab_screen_interactive():
-    """
-    交互式截图，返回 base64_png；若用户 ESC/取消则返回 None
-    依赖：pyautogui、Pillow
-    """
-
-    # 1) 最小化当前前台窗口
+    # ... (代码不变) ...
     try:
         import pygetwindow as gw
         win = gw.getActiveWindow();  win.minimize()
     except Exception:  win = None
-
-    # 2) 全屏透明窗口，记录鼠标框选
     start = {}; bbox = {}
     root = tk.Tk()
     root.attributes('-fullscreen', True)
@@ -89,47 +135,38 @@ def grab_screen_interactive():
     cv = tk.Canvas(root, cursor='crosshair')
     cv.pack(fill='both', expand=True)
     rect = None
-
     def on_down(e):
         start['x'] = root.winfo_pointerx()
         start['y'] = root.winfo_pointery()
         nonlocal rect
         if rect: cv.delete(rect)
         rect = cv.create_rectangle(e.x, e.y, e.x, e.y, outline='red', width=2)
-
     def on_move(e):
         if rect:
             cv.coords(rect,
                       start['x']-root.winfo_rootx(), start['y']-root.winfo_rooty(),
                       e.x, e.y)
-
     def on_up(e):
         endx, endy = root.winfo_pointerx(), root.winfo_pointery()
         bbox['val'] = (min(start['x'],endx), min(start['y'],endy),
                        max(start['x'],endx), max(start['y'],endy))
         root.destroy()
-
-    def on_escape(e):                 # 允许 ESC 取消
+    def on_escape(e):
         root.destroy()
-
     cv.bind('<ButtonPress-1>', on_down)
     cv.bind('<B1-Motion>',      on_move)
     cv.bind('<ButtonRelease-1>',on_up)
     root.bind('<Escape>', on_escape)
     root.mainloop()
-
-    # 3) 还原窗口
     try:
         if win: win.restore()
     except Exception:
         pass
-
-    # 4) 真正截图
-    if 'val' not in bbox:      # 用户取消
+    if 'val' not in bbox:
         return None
     x1,y1,x2,y2 = bbox['val']
     w,h = x2-x1, y2-y1
-    if w<5 or h<5:             # 面积太小视为误操作
+    if w<5 or h<5:
         return None
     img = pyautogui.screenshot(region=(x1, y1, w, h))
     buf = io.BytesIO()
@@ -139,72 +176,143 @@ def grab_screen_interactive():
 # ----------------- Flask 路由 -----------------
 @app.route('/')
 def index():
-    return render_template('index.html', models=MODELS)
+    # return render_template('index.html', models=MODELS)
+    # 为了简单起见，直接渲染字符串模板，避免文件依赖问题
+    # 在实际项目中，推荐使用 render_template
+    with open('templates/index.html', 'r', encoding='utf-8') as f:
+        html_content = f.read()
+    # 手动替换模板变量（如果 index.html 中有 {{ models }}）
+    model_options = "".join([f'<option value="{model}">{model}</option>' for model in MODELS])
+    html_content = html_content.replace('{% for model in models %}{% endfor %}', model_options) # 简陋替换
+    # 或者更健壮的方式是用 Jinja2 渲染字符串
+    from jinja2 import Template
+    template = Template(html_content)
+    return template.render(models=MODELS)
+
 
 @app.route('/history')
 def history():
     """
     给前端读取完整历史 → 前端自己渲染 markdown
+    (这个接口保持不变，用于页面加载时恢复历史)
     """
     md_list = []
-    for msg in chat_history:
+    # 遍历 history 时要小心，流式传输过程中可能 history 还没完全更新
+    # 但这个接口主要用于初始加载，问题不大
+    temp_history = list(chat_history) # 复制一份以防迭代时修改
+    for msg in temp_history:
         if msg['role'] == 'user':
-            # 混合文字 + 图片
             md = ''
             for part in msg['parts']:
                 if 'text' in part:
                     md += part['text'] + '\n'
                 if 'inline_data' in part:
+                    # 保持不变，只给占位符
                     md += '![图片](data:%s;base64,%s)\n' % (
                         part['inline_data']['mime_type'],
-                        part['inline_data']['data'][:30]+'...')  # 只给前端一个占位（节省流量）
+                        part['inline_data']['data'][:30]+'...')
             md_list.append({'who': 'user', 'md': md})
-        else:
-            md_list.append({'who': 'bot',  'md': msg['parts'][0]['text']})
+        elif msg['role'] == 'model': # 确保是 model 角色
+             # 检查 parts 是否存在且不为空
+             if 'parts' in msg and msg['parts'] and 'text' in msg['parts'][0]:
+                 md_list.append({'who': 'bot',  'md': msg['parts'][0]['text']})
+             else:
+                 # 处理可能的空 parts 或格式问题
+                 print(f"警告：历史记录中发现格式异常的 model 消息: {msg}")
+                 md_list.append({'who': 'bot', 'md': '[空回复或格式错误]'})
+
     return jsonify(md_list)
 
+
 @app.route('/chat', methods=['POST'])
-def chat():
+def chat_initiate():
     """
-    data = {text: str, image: base64 or null, model: str}
+    修改后的 /chat 接口: 只接收用户消息，存入历史，不调用 LLM。
+    !! 在 chat_history 为空时，自动添加 BASE_PROMPT 到第一条用户消息中 !!
     """
+    global chat_history # 确保可以修改全局变量
+
     data = request.get_json(force=True)
-    enable_search = data.get('enable_search', False)
-    tools = [{"google_search": {}}] if enable_search else None
     text  = (data.get('text') or '').strip()
-    img_b64 = data.get('image')          # 可能为空
-    model = data.get('model', MODELS[0])  # 默认使用第一个模型
+    img_b64 = data.get('image')
 
     if not text and not img_b64:
-        return jsonify({'error': 'empty'}), 400
+        # 如果用户既没有输入文本也没有上传图片，则不允许发送
+        # （即使是第一条消息，也需要用户触发，不能仅靠 BASE_PROMPT 发起）
+        return jsonify({'error': '请输入内容或添加图片/截图'}), 400
 
     # -------- 组装 user 消息 --------
     parts = []
-    if not chat_history:
+
+    # !! 核心改动：检查 chat_history 是否为空 !!
+    is_first_message = not chat_history
+    if is_first_message and BASE_PROMPT: # 确保 BASE_PROMPT 有内容
+        # 如果是第一条消息，并且 BASE_PROMPT 非空，则将其作为第一个 part 添加
         parts.append({'text': BASE_PROMPT})
+        print("Info: Adding BASE_PROMPT for the first message.") # 添加日志方便调试
+
+    # 添加用户实际输入的文本 (如果存在)
     if text:
         parts.append({'text': text})
+
+    # 添加用户实际上传的图片 (如果存在)
     if img_b64:
-        mime = 'image/png'               # 前端截图是 PNG；上传图片也按 accept="image/*" 读作 dataURL
-        img_b64 = maybe_compress_image(img_b64)
-        parts.append({'inline_data': {'mime_type': mime, 'data': img_b64}})
+        mime = 'image/png' # 假设截图和上传都是 png 或会被转为 png/jpeg
+        try:
+            # 尝试压缩图片，如果失败则记录错误但可能继续（取决于你的需求）
+            img_b64 = maybe_compress_image(img_b64)
+            parts.append({'inline_data': {'mime_type': mime, 'data': img_b64}})
+        except Exception as e:
+            print(f"Error compressing image: {e}")
+            # 根据需要决定是否返回错误或继续（不带图片）
+            # return jsonify({'error': '图片处理失败'}), 500
+            # 这里选择继续，但不添加图片 part
+            pass
+
+
+    # 再次检查 parts 是否为空 (理论上，如果 text 或 img_b64 至少有一个，就不会为空)
+    # 但如果 BASE_PROMPT 是唯一内容且用户未输入，前面的检查会阻止
+    if not parts:
+         print("Warning: Attempting to send an empty message after processing.")
+         return jsonify({'error': '处理后内容为空'}), 400
+
+    # 构造最终的用户消息
     user_msg = {'role': 'user', 'parts': parts}
+    # 将构造好的用户消息添加到历史记录中
     chat_history.append(user_msg)
 
-    # -------- 调 LLM --------
-    try:
-        answer = call_gemini(chat_history, model, tools)  # 传递模型参数
-    except Exception as e:
-        answer = f"出错了：{e}"
+    # print("Chat history updated:", chat_history[-1]) # Debugging: 打印最后添加的消息
 
-    # -------- 保存 model 消息并返回 --------
-    bot_msg = {'role': 'model', 'parts': [{'text': answer}]}
-    chat_history.append(bot_msg)
-    return jsonify({'answer': answer})
+    # -------- 不再调用 LLM，直接返回成功 --------
+    return jsonify({'ok': True})
+
+
+@app.route('/stream')
+def stream():
+    """
+    新的 SSE 端点，负责调用流式 LLM 并转发结果
+    """
+    # 从查询参数获取模型和搜索设置
+    model = request.args.get('model', MODELS[0])
+    enable_search_str = request.args.get('enable_search', 'false').lower()
+    enable_search = enable_search_str == 'true'
+    tools = [{"google_search": {}}] if enable_search else None
+
+    # 检查 chat_history 是否为空或最后一个不是 user 消息 (理论上不应发生)
+    if not chat_history or chat_history[-1]['role'] != 'user':
+        def error_stream():
+            yield f"event: error\ndata: {json.dumps({'text': '错误：无法开始流，聊天历史状态异常。'})}\n\n"
+            yield f"event: end\ndata: [DONE]\n\n"
+        return Response(error_stream(), mimetype='text/event-stream')
+
+    # 使用流式生成器函数作为响应体
+    # 传递当前的 chat_history 副本，避免在生成过程中被外部修改影响
+    return Response(stream_gemini_response(list(chat_history), model, tools), mimetype='text/event-stream')
 
 
 @app.route('/screenshot', methods=['POST'])
 def screenshot():
+    # ... (代码不变) ...
     img_b64 = grab_screen_interactive()
     if img_b64:
         return jsonify({'img': img_b64})
@@ -212,6 +320,5 @@ def screenshot():
 
 # ----------------- 主入口 -----------------
 if __name__ == '__main__':
-    # logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+    # threaded=True 对于 SSE 是必要的
     app.run(debug=True, threaded=True, port=PORT, host='127.0.0.1')
-
