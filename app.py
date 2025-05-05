@@ -2,13 +2,13 @@ import markdown2
 import pygetwindow as gw
 import pyautogui
 import tkinter as tk
-import logging
 import requests
 import base64
 import io
 from flask import Flask, render_template, request, jsonify, send_from_directory
 from config import API_KEY, MODEL_BASE_URL, PORT, BASE_PROMPT, MODELS
 from PIL import Image
+import json
 
 
 # ----------------- 基础配置 -----------------
@@ -31,9 +31,23 @@ def call_gemini(history, model, tools=None):
     payload = {"contents": history}
     if tools:
         payload["tools"] = tools  # 动态添加 tools 字段
-    resp = requests.post(url, headers=HEADERS, json=payload, timeout=60)
+    resp = requests.post(url, headers=HEADERS, json=payload, timeout=300)
     if resp.status_code == 200:
-        return resp.json()['candidates'][0]['content']['parts'][0]['text']
+        response_data = resp.json()
+        candidates = response_data.get('candidates')
+        content = candidates[0].get('content')
+        parts_list = content.get('parts')
+        full_text_list = []
+        for part in parts_list:
+            # 确保 part 是字典并且包含 'text' 键
+            if isinstance(part, dict) and 'text' in part:
+                full_text_list.append(part['text'])
+            else:
+                # 可以选择忽略无效的 part 或记录日志
+                print(f"警告：parts 列表中的元素格式不符合预期: {part}")
+        full_text = "".join(full_text_list)
+        return full_text
+        # return resp.json()['candidates'][0]['content']['parts'][0]['text']
     raise RuntimeError(f'Gemini Error {resp.status_code}: {resp.text[:200]}')
 
 
@@ -198,6 +212,6 @@ def screenshot():
 
 # ----------------- 主入口 -----------------
 if __name__ == '__main__':
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-    app.run(debug=False, threaded=True, port=PORT, host='127.0.0.1')
+    # logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+    app.run(debug=True, threaded=True, port=PORT, host='127.0.0.1')
 
