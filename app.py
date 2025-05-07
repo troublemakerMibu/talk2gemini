@@ -11,6 +11,7 @@ from flask import Flask, Response, render_template, request, jsonify, send_from_
 from config import key_manager, MODEL_BASE_URL, PORT, BASE_PROMPT, MODELS
 from PIL import Image
 from threading import Lock
+# from jinja2 import Template
 
 # ----------------- 基础配置 -----------------
 HEADERS = {"Content-Type": "application/json"}
@@ -35,7 +36,7 @@ def reset():
 def stream_gemini_response(history, model, tools=None):
     global current_bot_response_full, chat_history, last_used_key_lock, last_used_key
     current_bot_response_full = ""
-    max_retries = 300
+    max_retries = key_manager.get_status()["valid_keys"]
     for attempt in range(max_retries+1):
         try:
             with last_used_key_lock:
@@ -187,18 +188,18 @@ def grab_screen_interactive():
 # ----------------- Flask 路由 -----------------
 @app.route('/')
 def index():
-    # return render_template('index.html', models=MODELS)
+    return render_template('index.html', models=MODELS)
     # 为了简单起见，直接渲染字符串模板，避免文件依赖问题
     # 在实际项目中，推荐使用 render_template
-    with open('templates/index.html', 'r', encoding='utf-8') as f:
-        html_content = f.read()
-    # 手动替换模板变量（如果 index.html 中有 {{ models }}）
-    model_options = "".join([f'<option value="{model}">{model}</option>' for model in MODELS])
-    html_content = html_content.replace('{% for model in models %}{% endfor %}', model_options) # 简陋替换
-    # 或者更健壮的方式是用 Jinja2 渲染字符串
-    from jinja2 import Template
-    template = Template(html_content)
-    return template.render(models=MODELS)
+    # with open('templates/index.html', 'r', encoding='utf-8') as f:
+    #     html_content = f.read()
+    # # 手动替换模板变量（如果 index.html 中有 {{ models }}）
+    # model_options = "".join([f'<option value="{model}">{model}</option>' for model in MODELS])
+    # html_content = html_content.replace('{% for model in models %}{% endfor %}', model_options) # 简陋替换
+    # # 或者更健壮的方式是用 Jinja2 渲染字符串
+    #
+    # template = Template(html_content)
+    # return template.render(models=MODELS)
 
 
 @app.route('/history')

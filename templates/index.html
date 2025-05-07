@@ -37,7 +37,9 @@ pre{white-space:pre-wrap;}
 {% endraw %}
 
 <!-- marked CDN，如访问不了可换本地文件 -->
-<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="/static/marked.min.js"></script>
+
+{#<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>#}
 <script>
 /* marked 兼容 / 容错 */
 function md2html(txt){
