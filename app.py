@@ -11,7 +11,6 @@ from flask import Flask, Response, render_template, request, jsonify, send_from_
 from config import key_manager, MODEL_BASE_URL, PORT, BASE_PROMPT, MODELS
 from PIL import Image
 from threading import Lock
-# from jinja2 import Template
 
 # ----------------- 基础配置 -----------------
 HEADERS = {"Content-Type": "application/json"}
