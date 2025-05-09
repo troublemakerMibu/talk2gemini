@@ -277,4 +277,4 @@ def stream():
 # ----------------- 主入口 -----------------
 if __name__ == '__main__':
     # threaded=True 对于 SSE 是必要的
-    app.run(debug=True, threaded=True, port=PORT, host='127.0.0.1')
+    app.run(debug=True, threaded=True, port=PORT, host='0.0.0.0')
