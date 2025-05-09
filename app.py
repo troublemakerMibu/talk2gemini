@@ -85,8 +85,14 @@ def stream_gemini_response(history, model, tools=None):
                         last_used_key = None
                 elif e.response.status_code in [400, 403]:
                     key_manager.mark_key_invalid(api_key)
+                    print(f"[无效的 API Key] API Key '{api_key}' 已被标记为无效。")
                     with last_used_key_lock:
                         last_used_key  = None
+                elif e.response.status_code >= 500:
+                    key_manager.temporarily_suspend_key(api_key, cooldown=300)
+                    print(f"[服务器错误] API Key '{api_key}' 已被挂起，将在 300 秒后恢复。")
+                    with last_used_key_lock:
+                        last_used_key = None
                 else:
                     key_manager.mark_key_invalid(api_key)
                     with last_used_key_lock:
