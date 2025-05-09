@@ -1,8 +1,5 @@
 import time
 import markdown2
-import pygetwindow as gw # 截图部分保持不变
-import pyautogui
-import tkinter as tk
 import requests
 import base64
 import io
@@ -11,7 +8,7 @@ from flask import Flask, Response, render_template, request, jsonify, send_from_
 from config import key_manager, MODEL_BASE_URL, PORT, BASE_PROMPT, MODELS
 from PIL import Image
 from threading import Lock
-# from jinja2 import Template
+
 
 # ----------------- 基础配置 -----------------
 HEADERS = {"Content-Type": "application/json"}
@@ -138,58 +135,7 @@ def maybe_compress_image(b64, target_kb=3600):
             return base64.b64encode(buff.getvalue()).decode()
         quality -= 5
 
-# ----------------- 截图（最小化浏览器 + 框选区域） -----------------
-def grab_screen_interactive():
-    # ... (代码不变) ...
-    try:
-        import pygetwindow as gw
-        win = gw.getActiveWindow();  win.minimize()
-    except Exception:  win = None
-    start = {}; bbox = {}
-    root = tk.Tk()
-    root.attributes('-fullscreen', True)
-    root.attributes('-alpha', 0.25)
-    root.configure(bg='black')
-    cv = tk.Canvas(root, cursor='crosshair')
-    cv.pack(fill='both', expand=True)
-    rect = None
-    def on_down(e):
-        start['x'] = root.winfo_pointerx()
-        start['y'] = root.winfo_pointery()
-        nonlocal rect
-        if rect: cv.delete(rect)
-        rect = cv.create_rectangle(e.x, e.y, e.x, e.y, outline='red', width=2)
-    def on_move(e):
-        if rect:
-            cv.coords(rect,
-                      start['x']-root.winfo_rootx(), start['y']-root.winfo_rooty(),
-                      e.x, e.y)
-    def on_up(e):
-        endx, endy = root.winfo_pointerx(), root.winfo_pointery()
-        bbox['val'] = (min(start['x'],endx), min(start['y'],endy),
-                       max(start['x'],endx), max(start['y'],endy))
-        root.destroy()
-    def on_escape(e):
-        root.destroy()
-    cv.bind('<ButtonPress-1>', on_down)
-    cv.bind('<B1-Motion>',      on_move)
-    cv.bind('<ButtonRelease-1>',on_up)
-    root.bind('<Escape>', on_escape)
-    root.mainloop()
-    try:
-        if win: win.restore()
-    except Exception:
-        pass
-    if 'val' not in bbox:
-        return None
-    x1,y1,x2,y2 = bbox['val']
-    w,h = x2-x1, y2-y1
-    if w<5 or h<5:
-        return None
-    img = pyautogui.screenshot(region=(x1, y1, w, h))
-    buf = io.BytesIO()
-    img.save(buf, format='PNG')
-    return base64.b64encode(buf.getvalue()).decode()
+
 
 # ----------------- Flask 路由 -----------------
 @app.route('/')
@@ -327,13 +273,6 @@ def stream():
     return Response(stream_gemini_response(list(chat_history), model, tools), mimetype='text/event-stream')
 
 
-@app.route('/screenshot', methods=['POST'])
-def screenshot():
-    # ... (代码不变) ...
-    img_b64 = grab_screen_interactive()
-    if img_b64:
-        return jsonify({'img': img_b64})
-    return jsonify({'img': None}), 500
 
 # ----------------- 主入口 -----------------
 if __name__ == '__main__':

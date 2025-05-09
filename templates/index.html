@@ -157,8 +157,7 @@ function md2html(txt){
   </select>
   <input type="file" accept="image/*" id="pick" style="display:none">
   <button id="pickBtn">选择图片</button>
-  <button id="shotBtn">屏幕截图</button>
-  <div id="text-input" contenteditable="true" placeholder="输入内容…"></div>
+  <div id="text-input" contenteditable="true" placeholder="输入内容…（Shift+Enter换行/Enter发送）"></div>
   <label style="display: flex; align-items: center; gap: 5px;">
   <input type="checkbox" id="enableSearch" />
   联网搜索
@@ -243,28 +242,7 @@ $("pick").onchange   = e=>{
     rd.readAsDataURL(f);
 };
 
-$("shotBtn").onclick = async ()=>{
-    $("shotBtn").disabled = true;
-    $("shotBtn").textContent = '截图中...';
-    try {
-        const r  = await fetch('/screenshot',{method:'POST'});
-        const js = await r.json();
-        if(js.img){
-            imageBase64   = js.img;
-            imageLocalURL = 'data:image/png;base64,'+js.img;
-            previewImage.src = imageLocalURL;
-            previewContainer.style.display='block';
-        } else if (r.status !== 500) {
-            alert("截图失败或用户取消");
-        }
-    } catch (err) {
-        console.error("截图请求失败:", err);
-        alert("截图功能出错");
-    } finally {
-        $("shotBtn").disabled = false;
-        $("shotBtn").textContent = '屏幕截图';
-    }
-};
+
 
 removeImageBtn.onclick = () => {
     imageBase64 = null;
