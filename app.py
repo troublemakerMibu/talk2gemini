@@ -153,6 +153,13 @@ def index():
     # template = Template(html_content)
     # return template.render(models=MODELS)
 
+# 在文件中任意位置添加
+@app.route('/models')
+def get_models():
+    """
+    新增的模型列表接口
+    """
+    return jsonify(MODELS)
 
 @app.route('/history')
 def history():
