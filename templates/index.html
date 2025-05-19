@@ -305,23 +305,19 @@ document.addEventListener('DOMContentLoaded', () => {
 // 新增变量
 let isBarCollapsed = false;
 
-// 箭头按钮点击事件
+const toggleBar = document.getElementById('toggleBar');
 document.getElementById('arrowBtn').addEventListener('click', () => {
   isBarCollapsed = !isBarCollapsed;
   if (isBarCollapsed) {
-    // 收起操作栏 => 显示向上箭头 (▲)
     document.getElementById('bar').classList.add('collapsed');
-    document.getElementById('arrowBtn').innerHTML = '&#9650;'; // 向上箭头
+    document.getElementById('arrowBtn').innerHTML = '&#9650;';
+    toggleBar.style.bottom = '0'; // 收起时让箭头到底部
   } else {
-    // 展开操作栏 => 显示向下箭头 (▼)
     document.getElementById('bar').classList.remove('collapsed');
-    document.getElementById('arrowBtn').innerHTML = '&#9660;'; // 向下箭头
+    document.getElementById('arrowBtn').innerHTML = '&#9660;';
+    toggleBar.style.bottom = '140px'; // 展开时回到bar上方
   }
 });
-
-
-
-
 </script>
 
 <script>
@@ -404,6 +400,7 @@ textInput.addEventListener('focus', () => {
     document.getElementById('arrowBtn').click();
   }
 });
+
 // 文件选择处理
 $("pickBtn").onclick = () => $("pick").click();
 $("pick").onchange = e => {
