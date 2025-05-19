@@ -197,27 +197,57 @@ pre {
   color: #888;
   font-style: italic;
 }
+/* 移动端收起按钮样式 */
+#toggleBar {
+  display: none; /* 默认隐藏（桌面端不显示） */
+  position: fixed;
+  bottom: 140px; /* 初始位置在#bar上方 */
+  left: 0;
+  right: 0;
+  z-index: 15;
+  text-align: center;
+}
+
+.arrow-btn {
+  width: 40px;
+  height: 20px;
+  background: #fff;
+  border: 1px solid #ddd;
+  border-radius: 6px 6px 0 0;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+  transition: all 0.3s ease;
+}
+
+#bar.collapsed {
+  transform: translateY(140px);
+  opacity: 0;
+  pointer-events: none;
+  transition: transform 0.3s ease, opacity 0.3s ease;
+}
+#bar {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+
+/* 移动端专属样式 */
+@media (max-width: 768px) {
+  #toggleBar {
+    display: block;
+  }
+  #bar {
+    transition: transform 0.3s ease;
+  }
+}
+
 </style>
 {% endraw %}
-<script src="/static/marked.min.js"></script>
-<script>
-function md2html(txt){
-  if (window.marked){
-     marked.setOptions({
-         gfm: true,
-         breaks: true,
-     });
-     if (typeof marked.parse==='function') return marked.parse(txt);
-     if (typeof marked     ==='function') return marked(txt);
-  }
-  return txt.replace(/&/g,"&amp;")
-         .replace(/</g,"&lt;")
-         .replace(/>/g,"&gt;")
-         .replace(/\n/g,"<br>");
-}
-</script>
+
 <body>
 <div id="history"></div>
+<div id="toggleBar">
+  <button id="arrowBtn" class="arrow-down">&#9660;</button>
+</div>
 <div id="bar">
   <select id="modelSelect"></select>
   <input type="file" accept="image/*" id="pick" style="display:none">
@@ -245,26 +275,65 @@ document.addEventListener('DOMContentLoaded', () => {
   const script = document.createElement('script');
   script.src = '/static/marked.min.js';
   script.onload = () => {
-    // 标记加载完成状态
-    window.markedReady = true;
-    // 处理待处理的markdown渲染
-    if (window.pendingMd) {
-      document.querySelectorAll('.msg').forEach(el => {
-        if (el.dataset.pending) {
-          el.innerHTML = md2html(el.dataset.content);
-          delete el.dataset.pending;
-        }
-      });
-    }
+       // 定义 md2html 函数
+       window.md2html = function(txt) {
+         if (window.marked) {
+           marked.setOptions({ gfm: true, breaks: true, html: true });
+           return marked.parse(txt);
+         }
+         // 回退逻辑（纯文本渲染）
+         return txt.replace(/&/g,"&amp;")
+                  .replace(/</g,"&lt;")
+                  .replace(/>/g,"&gt;")
+                  .replace(/\n/g,"<br>");
+       };
+       // 标记加载完成状态
+       window.markedReady = true;
+       // 处理待解析内容
+       if (window.pendingMd) {
+         document.querySelectorAll('.msg').forEach(el => {
+           if (el.dataset.pending) {
+             el.innerHTML = md2html(el.dataset.content);
+             delete el.dataset.pending;
+           }
+         });
+       }
   };
+
   document.body.appendChild(script);
 });
+// 新增变量
+let isBarCollapsed = false;
+
+// 箭头按钮点击事件
+document.getElementById('arrowBtn').addEventListener('click', () => {
+  isBarCollapsed = !isBarCollapsed;
+  if (isBarCollapsed) {
+    // 收起操作栏 => 显示向上箭头 (▲)
+    document.getElementById('bar').classList.add('collapsed');
+    document.getElementById('arrowBtn').innerHTML = '&#9650;'; // 向上箭头
+  } else {
+    // 展开操作栏 => 显示向下箭头 (▼)
+    document.getElementById('bar').classList.remove('collapsed');
+    document.getElementById('arrowBtn').innerHTML = '&#9660;'; // 向下箭头
+  }
+});
+
+
+
+
 </script>
 
 <script>
 const $ = id => document.getElementById(id);
 const historyBox = $("history");
 const textInput = $("text-input");
+textInput.addEventListener('focus', () => {
+  if (isBarCollapsed) {
+    document.getElementById('arrowBtn').click();
+  }
+});
+
 const previewContainer = $("preview-container");
 const previewImage = $("preview-img");
 const removeImageBtn = $("remove-image-btn");
@@ -329,7 +398,12 @@ textInput.addEventListener('focus', () => {
     window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
   }, 300);
 });
-
+// 输入框聚焦时自动展开
+textInput.addEventListener('focus', () => {
+  if (isBarCollapsed) {
+    document.getElementById('arrowBtn').click();
+  }
+});
 // 文件选择处理
 $("pickBtn").onclick = () => $("pick").click();
 $("pick").onchange = e => {
