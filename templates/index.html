@@ -289,6 +289,30 @@
     #viewer.visible #viewerImg {
       transform: scale(1);
     }
+    /* 修改导出按钮样式 */
+    #exportBtn {
+      position: absolute;
+      top: 15px;
+      left: 15px;  /* 改为 left */
+      background: #28a745;
+      color: white;
+      padding: 8px 16px;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 500;
+      z-index: 100;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+    }
+
+    #exportBtn:hover {
+      background: #218838;
+    }
+
+    #exportBtn:disabled {
+      background: #6c757d;
+      cursor: not-allowed;
+    }
+
 
     /* 响应式设计 */
     @media (max-width: 768px) {
@@ -316,6 +340,8 @@
 </head>
 <body>
   <div id="history"></div>
+  <button id="exportBtn" title="导出对话历史">导出</button>
+
 
   <div id="bar">
     <select id="modelSelect">
@@ -366,6 +392,7 @@
     const enableSearch = $("enableSearch");
     const viewer = $("viewer");
     const viewerImg = $("viewerImg");
+    const exportBtn = $("exportBtn");
 
     // 状态变量
     let imageBase64 = null;
@@ -699,6 +726,58 @@
       sendBtn.disabled = false;
       sendBtn.textContent = '发送';
     }
+    // 修改导出按钮的点击事件
+    exportBtn.onclick = async () => {
+      try {
+        // 检查是否有对话历史
+        const historyResponse = await fetch('/history');
+        const historyData = await historyResponse.json();
+
+        if (!historyData || historyData.length === 0) {
+          alert("当前没有可导出的对话历史");
+          return;
+        }
+
+        exportBtn.disabled = true;
+        exportBtn.textContent = '导出中...';
+
+        // 请求导出
+        const response = await fetch('/export');
+
+        if (!response.ok) {
+          throw new Error(`导出失败: ${response.status}`);
+        }
+
+        // 获取文件名
+        const contentDisposition = response.headers.get('Content-Disposition');
+        let filename = '对话历史.html';
+        if (contentDisposition) {
+          const matches = /filename="(.+)"/.exec(contentDisposition);
+          if (matches) {
+            filename = matches[1];
+          }
+        }
+
+        // 下载文件
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(url);
+        document.body.removeChild(a);
+
+        console.log('对话历史导出成功');
+      } catch (error) {
+        console.error('导出失败:', error);
+        alert('导出对话历史失败: ' + error.message);
+      } finally {
+        exportBtn.disabled = false;
+        exportBtn.textContent = '导出';
+      }
+    };
 
     // 新话题
     newTopicBtn.onclick = async () => {
@@ -766,6 +845,7 @@
     textInput.addEventListener('input', function() {
       // 可以添加自动高度调整逻辑
     });
+
   </script>
 </body>
 </html>

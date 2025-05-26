@@ -11,6 +11,8 @@ from flask import Flask, Response, render_template, request, jsonify, send_from_
 from config import key_manager, MODEL_BASE_URL, PORT, BASE_PROMPT, MODELS
 from PIL import Image
 from threading import Lock
+from datetime import datetime
+from urllib.parse import quote
 
 # ----------------- 基础配置 -----------------
 HEADERS = {"Content-Type": "application/json"}
@@ -115,6 +117,252 @@ def stream_gemini_response(history, model, tools=None):
     yield f"event: end\ndata: [DONE]\n\n"
     time.sleep(0.1)
 
+@app.route('/export', methods=['GET'])
+def export_history():
+    """
+    导出对话历史为HTML格式
+    """
+    global chat_history
+
+    # 获取当前时间
+    now = datetime.now()
+    timestamp = now.strftime("%y%m%d_%H%M")
+    # 使用英文文件名避免编码问题
+    filename_display = f"{timestamp}对话历史.html"
+    # URL编码的文件名
+    filename_encoded = quote(filename_display.encode('utf-8'))
+
+    # HTML模板（保持不变）
+    html_template = """<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{title}</title>
+    <style>
+        * {{
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }}
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background-color: #f5f7fa;
+            padding: 20px;
+        }}
+        .container {{
+            max-width: 900px;
+            margin: 0 auto;
+            background-color: white;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }}
+        .header {{
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }}
+        .header h1 {{
+            font-size: 28px;
+            margin-bottom: 10px;
+        }}
+        .header .meta {{
+            font-size: 14px;
+            opacity: 0.9;
+        }}
+        .conversation {{
+            padding: 30px;
+        }}
+        .message {{
+            margin-bottom: 25px;
+            display: flex;
+            align-items: flex-start;
+        }}
+        .message.user {{
+            flex-direction: row-reverse;
+        }}
+        .message-content {{
+            max-width: 70%;
+            padding: 12px 18px;
+            border-radius: 18px;
+            position: relative;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+        }}
+        .message.user .message-content {{
+            background-color: #0084ff;
+            color: white;
+            margin-right: 10px;
+        }}
+        .message.bot .message-content {{
+            background-color: #e6e6ea;
+            color: #2d2d2d;
+            margin-left: 10px;
+        }}
+        .message-role {{
+            font-size: 12px;
+            color: #999;
+            margin: 0 15px;
+            font-weight: 500;
+            min-width: 80px;
+            text-align: center;
+        }}
+        .message.user .message-role {{
+            text-align: right;
+        }}
+        .message-content img {{
+            max-width: 100%;
+            height: auto;
+            border-radius: 10px;
+            margin-top: 10px;
+            display: block;
+        }}
+        .message-content pre {{
+            background-color: #f4f4f4;
+            padding: 10px;
+            border-radius: 5px;
+            overflow-x: auto;
+            margin: 10px 0;
+        }}
+        .message-content code {{
+            background-color: #f4f4f4;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 0.9em;
+        }}
+        .message-content pre code {{
+            background-color: transparent;
+            padding: 0;
+        }}
+        .message-content p {{
+            margin-bottom: 10px;
+        }}
+        .message-content p:last-child {{
+            margin-bottom: 0;
+        }}
+        .message-content ul, .message-content ol {{
+            margin: 10px 0;
+            padding-left: 25px;
+        }}
+        .message-content li {{
+            margin-bottom: 5px;
+        }}
+        .message-content h1, .message-content h2, .message-content h3 {{
+            margin: 15px 0 10px 0;
+        }}
+        .footer {{
+            text-align: center;
+            padding: 20px;
+            color: #666;
+            font-size: 14px;
+            border-top: 1px solid #eee;
+        }}
+        @media (max-width: 768px) {{
+            .container {{
+                margin: 0;
+                border-radius: 0;
+            }}
+            .header {{
+                padding: 20px;
+            }}
+            .header h1 {{
+                font-size: 22px;
+            }}
+            .conversation {{
+                padding: 20px;
+            }}
+            .message-content {{
+                max-width: 85%;
+            }}
+        }}
+        @media print {{
+            body {{
+                background: white;
+                padding: 0;
+            }}
+            .container {{
+                box-shadow: none;
+                max-width: 100%;
+            }}
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>对话历史记录</h1>
+            <div class="meta">
+                <div>导出时间：{export_time}</div>
+            </div>
+        </div>
+        <div class="conversation">
+            {messages}
+        </div>
+        <div class="footer">
+            <p>成功导出共 {message_count} 条消息</p>
+        </div>
+    </div>
+</body>
+</html>"""
+
+    # 构建消息HTML
+    messages_html = []
+    message_count = 0
+
+    for msg in chat_history:
+        message_count += 1
+        role = msg['role']
+        role_display = '用户' if role == 'user' else '人工智能'
+        message_class = 'user' if role == 'user' else 'bot'
+
+        content_parts = []
+        for part in msg.get('parts', []):
+            if 'text' in part:
+                # 转换Markdown到HTML
+                text_html = markdown2.markdown(
+                    part['text'],
+                    extras=['fenced-code-blocks', 'tables', 'break-on-newline']
+                )
+                content_parts.append(text_html)
+            elif 'inline_data' in part:
+                # 嵌入图片
+                img_html = f'<img src="data:{part["inline_data"]["mime_type"]};base64,{part["inline_data"]["data"]}" alt="图片">'
+                content_parts.append(img_html)
+
+        message_html = f'''
+        <div class="message {message_class}">
+            <div class="message-role">{role_display}</div>
+            <div class="message-content">
+                {''.join(content_parts)}
+            </div>
+        </div>
+        '''
+        messages_html.append(message_html)
+
+    # 填充模板
+    html_content = html_template.format(
+        title=now.strftime("%y年%m月%d日%H时%M分") + "对话历史",
+        export_time=now.strftime("%Y年%m月%d日 %H:%M:%S"),
+        messages=''.join(messages_html),
+        message_count=message_count
+    )
+    timestamp = now.strftime("%y%m%d_%H%M")
+    filename = f"chat_history_{timestamp}.html"
+    # 创建响应，使用URL编码的文件名
+    response = Response(
+        html_content,
+        mimetype='text/html',
+        headers={
+            'Content-Disposition': f'attachment; filename="{filename}"',
+            'Content-Type': 'text/html; charset=utf-8'
+        }
+    )
+
+    return response
 
 
 
