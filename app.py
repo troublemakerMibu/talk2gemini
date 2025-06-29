@@ -132,13 +132,14 @@ def export_history():
     # URL编码的文件名
     filename_encoded = quote(filename_display.encode('utf-8'))
 
-    # HTML模板（保持不变）
+    # 改进后的HTML模板，添加代码复制功能
     html_template = """<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{title}</title>
+
     <style>
         * {{
             margin: 0;
@@ -153,7 +154,7 @@ def export_history():
             padding: 20px;
         }}
         .container {{
-            max-width: 900px;
+            max-width: 1400px;
             margin: 0 auto;
             background-color: white;
             border-radius: 10px;
@@ -175,85 +176,249 @@ def export_history():
             opacity: 0.9;
         }}
         .conversation {{
-            padding: 30px;
+            padding: 40px;
         }}
         .message {{
-            margin-bottom: 25px;
+            margin-bottom: 30px;
             display: flex;
+            flex-direction: column;
             align-items: flex-start;
         }}
         .message.user {{
+            align-items: flex-end;
+        }}
+
+        /* 角色标识样式 */
+        .message-header {{
+            display: flex;
+            align-items: center;
+            margin-bottom: 8px;
+            gap: 10px;
+        }}
+        .message.user .message-header {{
             flex-direction: row-reverse;
         }}
-        .message-content {{
-            max-width: 70%;
-            padding: 12px 18px;
-            border-radius: 18px;
-            position: relative;
-            box-shadow: 0 1px 2px rgba(0,0,0,0.1);
-        }}
-        .message.user .message-content {{
-            background-color: #0084ff;
+        .avatar {{
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
             color: white;
-            margin-right: 10px;
+            font-size: 16px;
         }}
-        .message.bot .message-content {{
-            background-color: #e6e6ea;
-            color: #2d2d2d;
-            margin-left: 10px;
+        .message.user .avatar {{
+            background-color: #0084ff;
+        }}
+        .message.bot .avatar {{
+            background-color: #7c3aed;
         }}
         .message-role {{
-            font-size: 12px;
-            color: #999;
-            margin: 0 15px;
-            font-weight: 500;
-            min-width: 80px;
-            text-align: center;
+            font-size: 15px;
+            font-weight: 600;
+            color: #555;
         }}
-        .message.user .message-role {{
-            text-align: right;
+
+        /* 消息内容样式 */
+        .message-content {{
+            max-width: 85%;
+            width: 100%;
+            padding: 16px 20px;
+            border-radius: 12px;
+            position: relative;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            font-size: 15px;
         }}
-        .message-content img {{
-            max-width: 100%;
-            height: auto;
-            border-radius: 10px;
-            margin-top: 10px;
-            display: block;
+        .message.user .message-content {{
+            background-color: #e3f2fd;
+            color: #1565c0;
+            border: 1px solid #bbdefb;
+        }}
+        .message.bot .message-content {{
+            background-color: #f3f4f6;
+            color: #1f2937;
+            border: 1px solid #e5e7eb;
+        }}
+
+        /* 代码块样式 */
+        .code-block-wrapper {{
+            position: relative;
+            margin: 15px 0;
         }}
         .message-content pre {{
-            background-color: #f4f4f4;
-            padding: 10px;
-            border-radius: 5px;
+            background-color: #1e293b;
+            color: #e2e8f0;
+            padding: 15px;
+            padding-top: 40px; /* 为复制按钮留出空间 */
+            border-radius: 8px;
             overflow-x: auto;
-            margin: 10px 0;
+            font-size: 14px;
+            margin: 0;
         }}
+
+        /* 复制按钮样式 */
+        .copy-button {{
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            background-color: #475569;
+            color: #e2e8f0;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            font-family: inherit;
+        }}
+        .copy-button:hover {{
+            background-color: #64748b;
+            transform: translateY(-1px);
+        }}
+        .copy-button:active {{
+            transform: translateY(0);
+        }}
+        .copy-button.copied {{
+            background-color: #10b981;
+        }}
+
+        /* 行内代码样式 */
         .message-content code {{
-            background-color: #f4f4f4;
+            background-color: #e2e8f0;
+            color: #0f172a;
             padding: 2px 6px;
-            border-radius: 3px;
-            font-family: 'Consolas', 'Monaco', monospace;
+            border-radius: 4px;
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
             font-size: 0.9em;
         }}
         .message-content pre code {{
             background-color: transparent;
+            color: #e2e8f0;
             padding: 0;
         }}
+
+        /* 数学公式样式 */
+        .math {{
+            font-family: 'Times New Roman', Times, serif;
+            font-style: italic;
+            margin: 0 0.25em;
+            display: inline-block;
+        }}
+        .math-block {{
+            display: block;
+            text-align: center;
+            margin: 1.2em 0;
+            font-family: 'Times New Roman', Times, serif;
+            font-size: 1.15em;
+            overflow-x: auto;
+            padding: 0.5em 0;
+        }}
+        /* 分数样式 */
+        .frac {{
+            display: inline-block;
+            vertical-align: middle;
+            text-align: center;
+            position: relative;
+            font-style: normal;
+        }}
+        .frac .num {{
+            display: block;
+            border-bottom: 1px solid currentColor;
+            padding-bottom: 0.1em;
+        }}
+        .frac .den {{
+            display: block;
+            padding-top: 0.1em;
+        }}
+        /* 上标和下标 */
+        .math sup, .math sub, .math-block sup, .math-block sub {{
+            font-size: 0.75em;
+        }}
+        .math sup {{
+            vertical-align: super;
+        }}
+        .math sub {{
+            vertical-align: sub;
+        }}
+        /* 根号 */
+        .sqrt {{
+            position: relative;
+            padding-left: 0.5em;
+            padding-top: 0.1em;
+            margin-left: 0.2em;
+        }}
+        .sqrt::before {{
+            content: '√';
+            position: absolute;
+            left: 0;
+            top: 0;
+            font-size: 1.2em;
+        }}
+        .sqrt.has-index::before {{
+            font-size: 1em;
+        }}
+        .sqrt-index {{
+            position: absolute;
+            left: 0;
+            top: -0.5em;
+            font-size: 0.6em;
+        }}
+
+        /* 内容格式化样式 */
+        .message-content img {{
+            max-width: 100%;
+            height: auto;
+            border-radius: 8px;
+            margin-top: 10px;
+            display: block;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }}
         .message-content p {{
-            margin-bottom: 10px;
+            margin-bottom: 12px;
+            line-height: 1.7;
         }}
         .message-content p:last-child {{
             margin-bottom: 0;
         }}
         .message-content ul, .message-content ol {{
-            margin: 10px 0;
-            padding-left: 25px;
+            margin: 12px 0;
+            padding-left: 30px;
         }}
         .message-content li {{
-            margin-bottom: 5px;
+            margin-bottom: 6px;
         }}
         .message-content h1, .message-content h2, .message-content h3 {{
-            margin: 15px 0 10px 0;
+            margin: 20px 0 12px 0;
+            font-weight: 600;
         }}
+        .message-content h1 {{
+            font-size: 24px;
+        }}
+        .message-content h2 {{
+            font-size: 20px;
+        }}
+        .message-content h3 {{
+            font-size: 18px;
+        }}
+
+        /* 表格样式 */
+        .message-content table {{
+            border-collapse: collapse;
+            width: 100%;
+            margin: 15px 0;
+        }}
+        .message-content th, .message-content td {{
+            border: 1px solid #e5e7eb;
+            padding: 8px 12px;
+            text-align: left;
+        }}
+        .message-content th {{
+            background-color: #f9fafb;
+            font-weight: 600;
+        }}
+
         .footer {{
             text-align: center;
             padding: 20px;
@@ -261,6 +426,8 @@ def export_history():
             font-size: 14px;
             border-top: 1px solid #eee;
         }}
+
+        /* 响应式设计 */
         @media (max-width: 768px) {{
             .container {{
                 margin: 0;
@@ -276,9 +443,15 @@ def export_history():
                 padding: 20px;
             }}
             .message-content {{
-                max-width: 85%;
+                max-width: 100%;
+                font-size: 14px;
+            }}
+            .copy-button {{
+                padding: 4px 8px;
+                font-size: 11px;
             }}
         }}
+
         @media print {{
             body {{
                 background: white;
@@ -287,6 +460,9 @@ def export_history():
             .container {{
                 box-shadow: none;
                 max-width: 100%;
+            }}
+            .copy-button {{
+                display: none !important;
             }}
         }}
     </style>
@@ -306,8 +482,200 @@ def export_history():
             <p>成功导出共 {message_count} 条消息</p>
         </div>
     </div>
+
+    <script>
+        // 代码复制功能
+        function copyCode(button, codeId) {{
+            const codeElement = document.getElementById(codeId);
+            if (!codeElement) {{
+                console.error('找不到代码元素:', codeId);
+                return;
+            }}
+
+            // 获取代码文本，去除HTML标签
+            const codeText = codeElement.textContent || codeElement.innerText;
+
+            // 使用现代的Clipboard API（如果可用）
+            if (navigator.clipboard && navigator.clipboard.writeText) {{
+                navigator.clipboard.writeText(codeText).then(() => {{
+                    // 更新按钮状态
+                    const originalText = button.textContent;
+                    button.textContent = '已复制';
+                    button.classList.add('copied');
+
+                    setTimeout(() => {{
+                        button.textContent = originalText;
+                        button.classList.remove('copied');
+                    }}, 2000);
+                }}).catch(err => {{
+                    console.error('复制失败:', err);
+                    fallbackCopy(codeText, button);
+                }});
+            }} else {{
+                // 降级方案
+                fallbackCopy(codeText, button);
+            }}
+        }}
+
+        // 降级的复制方案
+        function fallbackCopy(text, button) {{
+            const textarea = document.createElement('textarea');
+            textarea.value = text;
+            textarea.style.position = 'fixed';
+            textarea.style.top = '0';
+            textarea.style.left = '-999999px';
+            textarea.setAttribute('readonly', '');
+            document.body.appendChild(textarea);
+
+            try {{
+                textarea.select();
+                textarea.setSelectionRange(0, 99999); // 移动设备兼容
+
+                const successful = document.execCommand('copy');
+                if (successful) {{
+                    const originalText = button.textContent;
+                    button.textContent = '已复制';
+                    button.classList.add('copied');
+
+                    setTimeout(() => {{
+                        button.textContent = originalText;
+                        button.classList.remove('copied');
+                    }}, 2000);
+                }} else {{
+                    alert('复制失败，请手动选择并复制代码');
+                }}
+            }} catch (err) {{
+                console.error('复制失败:', err);
+                alert('复制失败，请手动选择并复制代码');
+            }} finally {{
+                document.body.removeChild(textarea);
+            }}
+        }}
+
+        // 简单的数学公式渲染器
+        function renderMath() {{
+            // 处理块级公式
+            document.querySelectorAll('.math-block').forEach(function(elem) {{
+                let content = elem.innerHTML;
+                // 处理分数
+                content = content.replace(/\\\\\\\\frac{{([^}}]+)}}{{([^}}]+)}}/g, '<span class="frac"><span class="num">$1</span><span class="den">$2</span></span>');
+                // 处理平方根
+                content = content.replace(/\\\\\\\\sqrt{{([^}}]+)}}/g, '<span class="sqrt">$1</span>');
+                // 处理带指数的根号
+                content = content.replace(/\\\\\\\\sqrt\\[([^\\]]+)\\]{{([^}}]+)}}/g, '<span class="sqrt has-index"><span class="sqrt-index">$1</span>$2</span>');
+                elem.innerHTML = content;
+            }});
+
+            // 处理行内公式
+            document.querySelectorAll('.math').forEach(function(elem) {{
+                let content = elem.innerHTML;
+                // 处理分数
+                content = content.replace(/\\\\\\\\frac{{([^}}]+)}}{{([^}}]+)}}/g, '<span class="frac"><span class="num">$1</span><span class="den">$2</span></span>');
+                // 处理平方根
+                content = content.replace(/\\\\\\\\sqrt{{([^}}]+)}}/g, '<span class="sqrt">$1</span>');
+                elem.innerHTML = content;
+            }});
+        }}
+
+        // 页面加载完成后执行
+        document.addEventListener('DOMContentLoaded', renderMath);
+    </script>
 </body>
 </html>"""
+
+    # 处理数学公式的函数
+    def process_math_formulas(text):
+        """处理文本中的数学公式"""
+        import re
+
+        # 首先保护代码块中的内容
+        code_blocks = []
+        def save_code_block(match):
+            code_blocks.append(match.group(0))
+            return f"__CODE_BLOCK_{len(code_blocks)-1}__"
+
+        # 保存代码块
+        text = re.sub(r'```[\\s\\S]*?```', save_code_block, text)
+        text = re.sub(r'`[^`]+`', save_code_block, text)
+
+        # 处理块级公式
+        text = re.sub(r'\\$\\$(.*?)\\$\\$', lambda m: f'<div class="math-block">{m.group(1)}</div>', text, flags=re.DOTALL)
+
+        # 处理行内公式
+        text = re.sub(r'\\$([^\\$]+)\\$', lambda m: f'<span class="math">{m.group(1)}</span>', text)
+
+        # 替换常见的数学符号
+        math_symbols = {
+            r'\\\\alpha': 'α', r'\\\\beta': 'β', r'\\\\gamma': 'γ', r'\\\\delta': 'δ',
+            r'\\\\epsilon': 'ε', r'\\\\zeta': 'ζ', r'\\\\eta': 'η', r'\\\\theta': 'θ',
+            r'\\\\iota': 'ι', r'\\\\kappa': 'κ', r'\\\\lambda': 'λ', r'\\\\mu': 'μ',
+            r'\\\\nu': 'ν', r'\\\\xi': 'ξ', r'\\\\pi': 'π', r'\\\\rho': 'ρ',
+            r'\\\\sigma': 'σ', r'\\\\tau': 'τ', r'\\\\upsilon': 'υ', r'\\\\phi': 'φ',
+            r'\\\\chi': 'χ', r'\\\\psi': 'ψ', r'\\\\omega': 'ω',
+            r'\\\\Alpha': 'Α', r'\\\\Beta': 'Β', r'\\\\Gamma': 'Γ', r'\\\\Delta': 'Δ',
+            r'\\\\Epsilon': 'Ε', r'\\\\Zeta': 'Ζ', r'\\\\Eta': 'Η', r'\\\\Theta': 'Θ',
+            r'\\\\Iota': 'Ι', r'\\\\Kappa': 'Κ', r'\\\\Lambda': 'Λ', r'\\\\Mu': 'Μ',
+            r'\\\\Nu': 'Ν', r'\\\\Xi': 'Ξ', r'\\\\Pi': 'Π', r'\\\\Rho': 'Ρ',
+            r'\\\\Sigma': 'Σ', r'\\\\Tau': 'Τ', r'\\\\Upsilon': 'Υ', r'\\\\Phi': 'Φ',
+            r'\\\\Chi': 'Χ', r'\\\\Psi': 'Ψ', r'\\\\Omega': 'Ω',
+            r'\\\\sum': '∑', r'\\\\prod': '∏', r'\\\\int': '∫', r'\\\\oint': '∮',
+            r'\\\\partial': '∂', r'\\\\nabla': '∇', r'\\\\pm': '±', r'\\\\mp': '∓',
+            r'\\\\times': '×', r'\\\\div': '÷', r'\\\\cdot': '·', r'\\\\circ': '∘',
+            r'\\\\bullet': '•', r'\\\\ldots': '…', r'\\\\cdots': '⋯', r'\\\\vdots': '⋮',
+            r'\\\\ddots': '⋱', r'\\\\leq': '≤', r'\\\\geq': '≥', r'\\\\neq': '≠',
+            r'\\\\approx': '≈', r'\\\\equiv': '≡', r'\\\\sim': '∼', r'\\\\simeq': '≃',
+            r'\\\\propto': '∝', r'\\\\infty': '∞', r'\\\\in': '∈', r'\\\\notin': '∉',
+            r'\\\\subset': '⊂', r'\\\\supset': '⊃', r'\\\\subseteq': '⊆', r'\\\\supseteq': '⊇',
+            r'\\\\cup': '∪', r'\\\\cap': '∩', r'\\\\emptyset': '∅', r'\\\\forall': '∀',
+            r'\\\\exists': '∃', r'\\\\neg': '¬', r'\\\\land': '∧', r'\\\\lor': '∨',
+            r'\\\\rightarrow': '→', r'\\\\leftarrow': '←', r'\\\\leftrightarrow': '↔',
+            r'\\\\Rightarrow': '⇒', r'\\\\Leftarrow': '⇐', r'\\\\Leftrightarrow': '⇔',
+            r'\\\\uparrow': '↑', r'\\\\downarrow': '↓', r'\\\\updownarrow': '↕',
+            r'\\\\angle': '∠', r'\\\\perp': '⊥', r'\\\\parallel': '∥',
+        }
+
+        for pattern, symbol in math_symbols.items():
+            text = text.replace(pattern, symbol)
+
+        # 处理上标和下标
+        text = re.sub(r'\\^{{([^}}]+)}}', r'<sup>\\1</sup>', text)
+        text = re.sub(r'\\^(\\w)', r'<sup>\\1</sup>', text)
+        text = re.sub(r'_{{([^}}]+)}}', r'<sub>\\1</sub>', text)
+        text = re.sub(r'_(\\w)', r'<sub>\\1</sub>', text)
+
+        # 恢复代码块
+        for i, code in enumerate(code_blocks):
+            text = text.replace(f"__CODE_BLOCK_{i}__", code)
+
+        return text
+
+    # 修改markdown2的处理，为代码块添加包装器
+    def process_code_blocks(html_content):
+        """为代码块添加复制按钮"""
+        import re
+        import uuid
+
+        def wrap_code_block(match):
+            code_block = match.group(0)
+            code_id = f"code-{uuid.uuid4().hex[:8]}"
+
+            # 提取代码内容
+            code_match = re.search(r'<pre><code[^>]*?>(.*?)</code></pre>', code_block, re.DOTALL)
+            if code_match:
+                code_content = code_match.group(1)
+                # 创建包装器
+                wrapped = f'''<div class="code-block-wrapper">
+                    <button class="copy-button" onclick="copyCode(this, '{code_id}')">
+                        复制
+                    </button>
+                    <pre><code id="{code_id}">{code_content}</code></pre>
+                </div>'''
+                return wrapped
+            return code_block
+
+        # 查找所有代码块并添加包装器
+        html_content = re.sub(r'<pre><code[^>]*?>.*?</code></pre>', wrap_code_block, html_content, flags=re.DOTALL)
+        return html_content
 
     # 构建消息HTML
     messages_html = []
@@ -316,26 +684,38 @@ def export_history():
     for msg in chat_history:
         message_count += 1
         role = msg['role']
-        role_display = '用户' if role == 'user' else '人工智能'
+        role_display = '用户' if role == 'user' else 'AI助手'
         message_class = 'user' if role == 'user' else 'bot'
+        avatar_text = '我' if role == 'user' else 'AI'
 
         content_parts = []
         for part in msg.get('parts', []):
             if 'text' in part:
+                # 先处理数学公式
+                text_with_math = process_math_formulas(part['text'])
+
                 # 转换Markdown到HTML
                 text_html = markdown2.markdown(
-                    part['text'],
-                    extras=['fenced-code-blocks', 'tables', 'break-on-newline']
+                    text_with_math,
+                    extras=['fenced-code-blocks', 'tables', 'break-on-newline', 'code-friendly']
                 )
+
+                # 为代码块添加复制按钮
+                text_html = process_code_blocks(text_html)
+
                 content_parts.append(text_html)
             elif 'inline_data' in part:
                 # 嵌入图片
                 img_html = f'<img src="data:{part["inline_data"]["mime_type"]};base64,{part["inline_data"]["data"]}" alt="图片">'
                 content_parts.append(img_html)
 
+        # 改进的消息HTML结构
         message_html = f'''
         <div class="message {message_class}">
-            <div class="message-role">{role_display}</div>
+            <div class="message-header">
+                <div class="avatar">{avatar_text}</div>
+                <div class="message-role">{role_display}</div>
+            </div>
             <div class="message-content">
                 {''.join(content_parts)}
             </div>
@@ -345,13 +725,15 @@ def export_history():
 
     # 填充模板
     html_content = html_template.format(
-        title=now.strftime("%y年%m月%d日%H时%M分") + "对话历史",
+        title=now.strftime("%Y年%m月%d日 %H:%M") + " 对话历史",
         export_time=now.strftime("%Y年%m月%d日 %H:%M:%S"),
         messages=''.join(messages_html),
         message_count=message_count
     )
+
     timestamp = now.strftime("%y%m%d_%H%M")
     filename = f"chat_history_{timestamp}.html"
+
     # 创建响应，使用URL编码的文件名
     response = Response(
         html_content,
@@ -365,6 +747,101 @@ def export_history():
     return response
 
 
+    # 修改markdown2的处理，为代码块添加包装器
+    def process_code_blocks(html_content):
+        """为代码块添加复制按钮"""
+        import re
+        import uuid
+
+        def wrap_code_block(match):
+            code_block = match.group(0)
+            code_id = f"code-{uuid.uuid4().hex[:8]}"
+
+            # 提取代码内容（去除<pre><code>标签）
+            code_match = re.search(r'<pre><code[^>]*>(.*?)</code></pre>', code_block, re.DOTALL)
+            if code_match:
+                # 创建包装器
+                wrapped = f'''<div class="code-block-wrapper">
+                    <button class="copy-button" onclick="copyCode(this, '{code_id}')">
+                        复制
+                    </button>
+                    <pre><code id="{code_id}">{code_match.group(1)}</code></pre>
+                </div>'''
+                return wrapped
+            return code_block
+
+        # 查找所有代码块并添加包装器
+        html_content = re.sub(r'<pre><code[^>]*>.*?</code></pre>', wrap_code_block, html_content, flags=re.DOTALL)
+        return html_content
+
+    # 构建消息HTML
+    messages_html = []
+    message_count = 0
+
+    for msg in chat_history:
+        message_count += 1
+        role = msg['role']
+        role_display = '用户' if role == 'user' else 'AI助手'
+        message_class = 'user' if role == 'user' else 'bot'
+        avatar_text = '我' if role == 'user' else 'AI'
+
+        content_parts = []
+        for part in msg.get('parts', []):
+            if 'text' in part:
+                # 先处理数学公式
+                text_with_math = process_math_formulas(part['text'])
+
+                # 转换Markdown到HTML
+                text_html = markdown2.markdown(
+                    text_with_math,
+                    extras=['fenced-code-blocks', 'tables', 'break-on-newline', 'code-friendly']
+                )
+
+                # 为代码块添加复制按钮
+                text_html = process_code_blocks(text_html)
+
+                content_parts.append(text_html)
+            elif 'inline_data' in part:
+                # 嵌入图片
+                img_html = f'<img src="data:{part["inline_data"]["mime_type"]};base64,{part["inline_data"]["data"]}" alt="图片">'
+                content_parts.append(img_html)
+
+        # 改进的消息HTML结构
+        message_html = f'''
+        <div class="message {message_class}">
+            <div class="message-header">
+                <div class="avatar">{avatar_text}</div>
+                <div class="message-role">{role_display}</div>
+            </div>
+            <div class="message-content">
+                {''.join(content_parts)}
+            </div>
+        </div>
+        '''
+        messages_html.append(message_html)
+
+    # 填充模板
+    html_content = html_template.format(
+        title=now.strftime("%Y年%m月%d日 %H:%M") + " 对话历史",
+        export_time=now.strftime("%Y年%m月%d日 %H:%M:%S"),
+        messages=''.join(messages_html),
+        message_count=message_count
+    )
+
+    timestamp = now.strftime("%y%m%d_%H%M")
+    filename = f"chat_history_{timestamp}.html"
+
+    # 创建响应，使用URL编码的文件名
+    response = Response(
+        html_content,
+        mimetype='text/html',
+        headers={
+            'Content-Disposition': f'attachment; filename="{filename}"',
+            'Content-Type': 'text/html; charset=utf-8'
+        }
+    )
+
+    return response
 
 
 
@@ -442,17 +919,7 @@ def grab_screen_interactive():
 @app.route('/')
 def index():
     return render_template('index.html', models=MODELS)
-    # 为了简单起见，直接渲染字符串模板，避免文件依赖问题
-    # 在实际项目中，推荐使用 render_template
-    # with open('templates/index.html', 'r', encoding='utf-8') as f:
-    #     html_content = f.read()
-    # # 手动替换模板变量（如果 index.html 中有 {{ models }}）
-    # model_options = "".join([f'<option value="{model}">{model}</option>' for model in MODELS])
-    # html_content = html_content.replace('{% for model in models %}{% endfor %}', model_options) # 简陋替换
-    # # 或者更健壮的方式是用 Jinja2 渲染字符串
-    #
-    # template = Template(html_content)
-    # return template.render(models=MODELS)
+
 
 
 @app.route('/history')

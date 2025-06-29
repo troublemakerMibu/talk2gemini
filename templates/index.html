@@ -1,851 +1,974 @@
 <!doctype html>
 <html lang="zh-CN">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>本地对话 (流式)</title>
-  <!-- 添加 KaTeX 支持 -->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>本地对话 (流式)</title>
+<!-- 添加 KaTeX 支持 -->
 <link rel="stylesheet" href="/static/katex.min.css">
 <script src="/static/katex.min.js" defer></script>
 <script src="/static/auto-render.min.js" defer></script>
 
-  {% raw %}
-  <style>
-    /* 基础样式 */
-    :root {
-      --primary-color: #0084ff;
-      --primary-hover: #0056b3;
-      --bot-bg: #e6e6e6;
-      --user-bg: var(--primary-color);
-      --border-radius: 8px;
-      --text-color: #333;
-      --bg-color: #f5f7fa;
-    }
+{% raw %}
+<style>
+/* 基础样式 */
+:root {
+--primary-color: #0084ff;
+--primary-hover: #0056b3;
+--bot-bg: #e6e6e6;
+--user-bg: var(--primary-color);
+--border-radius: 8px;
+--text-color: #333;
+--bg-color: #f5f7fa;
+}
 
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-    }
+* {
+box-sizing: border-box;
+margin: 0;
+padding: 0;
+}
 
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', sans-serif;
-      color: var(--text-color);
-      background: var(--bg-color);
-      line-height: 1.5;
-      min-height: 100vh;
-      display: flex;
-      flex-direction: column;
-      overflow: hidden; /* 防止出现滚动条 */
-    }
+body {
+font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', sans-serif;
+color: var(--text-color);
+background: var(--bg-color);
+line-height: 1.5;
+min-height: 100vh;
+display: flex;
+flex-direction: column;
+overflow: hidden; /* 防止出现滚动条 */
+}
 
-    /* 对话历史 */
-    #history {
-      flex: 1;
-      padding: 15px;
-      overflow-y: auto;
-      max-height: calc(100vh - 70px); /* 调整高度，减少空白 */
-      scroll-behavior: smooth;
-      padding-bottom: 20px; /* 增加底部内边距 */
-    }
+/* 对话历史 */
+#history {
+flex: 1;
+padding: 15px;
+overflow-y: auto;
+max-height: calc(100vh - 70px); /* 调整高度，减少空白 */
+scroll-behavior: smooth;
+padding-bottom: 20px; /* 增加底部内边距 */
+}
 
-    .msg {
-      max-width: 70%;
-      padding: 10px 14px;
-      margin: 8px 0;
-      border-radius: var(--border-radius);
-      word-break: break-word;
-      overflow-wrap: break-word;
-      overflow: hidden; /* 确保内容不溢出 */
-    }
+.msg {
+max-width: 70%;
+padding: 10px 14px;
+margin: 8px 0;
+border-radius: var(--border-radius);
+word-break: break-word;
+overflow-wrap: break-word;
+overflow: hidden; /* 确保内容不溢出 */
+}
 
-    /* 确保列表项正确显示 */
-    .msg ul, .msg ol {
-      padding-left: 24px; /* 增加列表的左内边距 */
-      margin: 10px 0;
-    }
+/* 确保列表项正确显示 */
+.msg ul, .msg ol {
+padding-left: 24px; /* 增加列表的左内边距 */
+margin: 10px 0;
+}
 
-    .msg li {
-      margin-bottom: 5px;
-    }
+.msg li {
+margin-bottom: 5px;
+}
 
-    .user {
-      background: var(--user-bg);
-      color: #fff;
-      margin-left: auto;
-    }
+.user {
+background: var(--user-bg);
+color: #fff;
+margin-left: auto;
+}
 
-    .bot {
-      background: var(--bot-bg);
-      color: #111;
-      margin-right: auto;
-    }
+.bot {
+background: var(--bot-bg);
+color: #111;
+margin-right: auto;
+}
 
-    .msg img {
-      max-width: 260px;
-      border-radius: 6px;
-      margin-top: 6px;
-      cursor: pointer;
-      transition: transform 0.2s;
-    }
+.msg img {
+max-width: 260px;
+border-radius: 6px;
+margin-top: 6px;
+cursor: pointer;
+transition: transform 0.2s;
+}
 
-    .msg img:hover {
-      transform: scale(1.02);
-    }
+.msg img:hover {
+transform: scale(1.02);
+}
 
-    /* 输入区 */
-    #bar {
-      position: sticky;
-      bottom: 0;
-      background: #fff;
-      border-top: 1px solid #ddd;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      padding: 12px 10px;
-      z-index: 10;
-      box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.05);
-    }
+/* 输入区 */
+#bar {
+position: sticky;
+bottom: 0;
+background: #fff;
+border-top: 1px solid #ddd;
+display: flex;
+align-items: center;
+gap: 8px;
+padding: 12px 10px;
+z-index: 10;
+box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.05);
+}
 
-    #text-input {
-      flex: 1;
-      font-size: 16px;
-      padding: 10px 12px;
-      border: 1px solid #ccc;
-      border-radius: var(--border-radius);
-      min-height: 22px;
-      max-height: 150px;
-      overflow-y: auto;
-      line-height: 1.5;
-      word-break: break-word;
-      white-space: pre-wrap;
-      transition: border-color 0.3s;
-    }
+#text-input {
+flex: 1;
+font-size: 16px;
+padding: 10px 12px;
+border: 1px solid #ccc;
+border-radius: var(--border-radius);
+min-height: 22px;
+max-height: 150px;
+overflow-y: auto;
+line-height: 1.5;
+word-break: break-word;
+white-space: pre-wrap;
+transition: border-color 0.3s;
+}
 
-    #text-input:focus {
-      outline: none;
-      border-color: var(--primary-color);
-    }
+#text-input:focus {
+outline: none;
+border-color: var(--primary-color);
+}
 
-    #text-input:empty::before {
-      content: attr(placeholder);
-      color: #aaa;
-      pointer-events: none;
-      display: block;
-    }
+#text-input:empty::before {
+content: attr(placeholder);
+color: #aaa;
+pointer-events: none;
+display: block;
+}
 
-    button {
-      padding: 8px 14px;
-      font-size: 15px;
-      border-radius: var(--border-radius);
-      cursor: pointer;
-      border: none;
-      transition: background-color 0.2s, transform 0.1s;
-    }
+button {
+padding: 8px 14px;
+font-size: 15px;
+border-radius: var(--border-radius);
+cursor: pointer;
+border: none;
+transition: background-color 0.2s, transform 0.1s;
+}
 
-    button:active {
-      transform: scale(0.98);
-    }
+button:active {
+transform: scale(0.98);
+}
 
-    select {
-      padding: 8px;
-      border-radius: 4px;
-      border: 1px solid #ccc;
-    }
+select {
+padding: 8px;
+border-radius: 4px;
+border: 1px solid #ccc;
+}
 
-    #send {
-      background-color: var(--primary-color);
-      color: white;
-      font-weight: 500;
-    }
+#send {
+background-color: var(--primary-color);
+color: white;
+font-weight: 500;
+}
 
-    #send:hover {
-      background-color: var(--primary-hover);
-    }
+#send:hover {
+background-color: var(--primary-hover);
+}
 
-    #send:disabled {
-      background-color: #6c757d;
-      cursor: not-allowed;
-    }
+#send:disabled {
+background-color: #6c757d;
+cursor: not-allowed;
+}
 
-    #pickBtn, #shotBtn {
-      background: #f0f0f0;
-    }
+#pickBtn, #shotBtn {
+background: #f0f0f0;
+}
 
-    #pickBtn:hover, #shotBtn:hover {
-      background: #e5e5e5;
-    }
+#pickBtn:hover, #shotBtn:hover {
+background: #e5e5e5;
+}
 
-    #newTopic {
-      margin-left: auto;
-      background: #f0f0f0;
-    }
+#newTopic {
+margin-left: auto;
+background: #f0f0f0;
+}
 
-    #newTopic:hover {
-      background: #e5e5e5;
-    }
+#newTopic:hover {
+background: #e5e5e5;
+}
 
-    /* 图片预览 */
-    #preview-container {
-      position: relative;
-      display: none;
-      margin-left: 6px;
-      align-self: center;
-    }
+/* 图片预览 */
+#preview-container {
+position: relative;
+display: none;
+margin-left: 6px;
+align-self: center;
+}
 
-    #preview-img {
-      max-height: 100px;
-      max-width: 100px;
-      border: 1px solid #888;
-      border-radius: 6px;
-      display: block;
-      cursor: pointer;
-      transition: transform 0.2s;
-    }
+#preview-img {
+max-height: 100px;
+max-width: 100px;
+border: 1px solid #888;
+border-radius: 6px;
+display: block;
+cursor: pointer;
+transition: transform 0.2s;
+}
 
-    #preview-img:hover {
-      transform: scale(1.05);
-    }
+#preview-img:hover {
+transform: scale(1.05);
+}
 
-    #remove-image-btn {
-      position: absolute;
-      top: -12px;
-      right: -12px;
-      background: rgba(220, 53, 69, 0.85);
-      color: white;
-      border: 2px solid white;
-      border-radius: 50%;
-      width: 28px;
-      height: 28px;
-      font-size: 17px;
-      font-weight: bold;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      cursor: pointer;
-      padding: 0;
-      box-shadow: 0 2px 4px rgba(0,0,0,0.3);
-      z-index: 1;
-      transition: background-color 0.2s, transform 0.15s;
-    }
+#remove-image-btn {
+position: absolute;
+top: -12px;
+right: -12px;
+background: rgba(220, 53, 69, 0.85);
+color: white;
+border: 2px solid white;
+border-radius: 50%;
+width: 28px;
+height: 28px;
+font-size: 17px;
+font-weight: bold;
+display: flex;
+align-items: center;
+justify-content: center;
+cursor: pointer;
+padding: 0;
+box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+z-index: 1;
+transition: background-color 0.2s, transform 0.15s;
+}
 
-    #remove-image-btn:hover {
-      background: rgba(200, 30, 45, 1);
-      transform: scale(1.1);
-    }
+#remove-image-btn:hover {
+background: rgba(200, 30, 45, 1);
+transform: scale(1.1);
+}
 
-    /* 代码和状态 */
-    pre {
-      white-space: pre-wrap;
-      background: #f5f5f5;
-      padding: 10px;
-      border-radius: 4px;
-      overflow-x: auto;
-      margin: 8px 0;
-    }
+/* 代码和状态 */
+pre {
+white-space: pre-wrap;
+background: #f5f5f5;
+padding: 10px;
+border-radius: 4px;
+overflow-x: auto;
+margin: 8px 0;
+position: relative; /* 添加相对定位 */
+}
 
-    code {
-      font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
-      font-size: 0.9em;
-    }
+code {
+font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+font-size: 0.9em;
+}
 
-    .thinking {
-      color: #888;
-      font-style: italic;
-    }
+.thinking {
+color: #888;
+font-style: italic;
+}
 
-    /* 数学表达式样式增强 */
-    .katex-display {
-      overflow-x: auto;
-      overflow-y: hidden;
-      padding: 5px 0;
-    }
+/* 数学表达式样式增强 */
+.katex-display {
+overflow-x: auto;
+overflow-y: hidden;
+padding: 5px 0;
+}
 
-    /* 查看器 */
-    #viewer {
-      display: none;
-      position: fixed;
-      left: 0;
-      top: 0;
-      width: 100%;
-      height: 100%;
-      background: rgba(0, 0, 0, 0.85);
-      z-index: 999;
-      align-items: center;
-      justify-content: center;
-      backdrop-filter: blur(2px);
-      transition: opacity 0.3s;
-    }
+/* 查看器 */
+#viewer {
+display: none;
+position: fixed;
+left: 0;
+top: 0;
+width: 100%;
+height: 100%;
+background: rgba(0, 0, 0, 0.85);
+z-index: 999;
+align-items: center;
+justify-content: center;
+backdrop-filter: blur(2px);
+transition: opacity 0.3s;
+}
 
-    #viewerImg {
-      max-width: 95vw;
-      max-height: 95vh;
-      border-radius: 6px;
-      box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
-      transform: scale(0.95);
-      transition: transform 0.3s;
-    }
+#viewerImg {
+max-width: 95vw;
+max-height: 95vh;
+border-radius: 6px;
+box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
+transform: scale(0.95);
+transition: transform 0.3s;
+}
 
-    #viewer.visible #viewerImg {
-      transform: scale(1);
-    }
-    /* 修改导出按钮样式 */
-    #exportBtn {
-      position: absolute;
-      top: 15px;
-      left: 15px;  /* 改为 left */
-      background: #28a745;
-      color: white;
-      padding: 8px 16px;
-      border-radius: 6px;
-      font-size: 14px;
-      font-weight: 500;
-      z-index: 100;
-      box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-    }
+#viewer.visible #viewerImg {
+transform: scale(1);
+}
 
-    #exportBtn:hover {
-      background: #218838;
-    }
+/* 修改导出按钮样式 */
+#exportBtn {
+position: absolute;
+top: 15px;
+left: 15px;  /* 改为 left */
+background: #28a745;
+color: white;
+padding: 8px 16px;
+border-radius: 6px;
+font-size: 14px;
+font-weight: 500;
+z-index: 100;
+box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+}
 
-    #exportBtn:disabled {
-      background: #6c757d;
-      cursor: not-allowed;
-    }
+#exportBtn:hover {
+background: #218838;
+}
 
+#exportBtn:disabled {
+background: #6c757d;
+cursor: not-allowed;
+}
 
-    /* 响应式设计 */
-    @media (max-width: 768px) {
-      #bar {
-        flex-wrap: wrap;
-        padding: 8px;
-      }
+/* 复制按钮样式 */
+.copy-btn {
+position: absolute;
+background: #4CAF50;
+color: white;
+border: none;
+padding: 4px 8px;
+font-size: 12px;
+border-radius: 4px;
+cursor: pointer;
+opacity: 0.8;
+transition: opacity 0.2s, background-color 0.2s;
+z-index: 10;
+}
 
-      #modelSelect, #text-input {
-        width: 100%;
-      }
+.copy-btn:hover {
+opacity: 1;
+background: #45a049;
+}
 
-      .msg {
-        max-width: 85%;
-      }
+.copy-btn.copied {
+background: #2196F3;
+}
 
-      #text-input {
-        order: -1;
-        margin-bottom: 8px;
-      }
-    }
-  </style>
-  {% endraw %}
-  <script src="/static/marked.min.js" defer></script>
+/* 响应式设计 */
+@media (max-width: 768px) {
+#bar {
+flex-wrap: wrap;
+padding: 8px;
+}
+
+#modelSelect, #text-input {
+width: 100%;
+}
+
+.msg {
+max-width: 85%;
+}
+
+#text-input {
+order: -1;
+margin-bottom: 8px;
+}
+}
+</style>
+{% endraw %}
+<script src="/static/marked.min.js" defer></script>
 </head>
 <body>
-  <div id="history"></div>
-  <button id="exportBtn" title="导出对话历史">导出</button>
-
-
-  <div id="bar">
-    <select id="modelSelect">
-      {% for model in models %}
-        <option value="{{ model }}">{{ model }}</option>
-      {% endfor %}
-    </select>
-
-    <input type="file" accept="image/*" id="pick" style="display:none">
-    <button id="pickBtn" title="从设备选择图片">选择图片</button>
-    <button id="shotBtn" title="捕获屏幕截图">屏幕截图</button>
-
-    <div id="text-input" contenteditable="true" placeholder="输入内容…（Shift+Enter 换行/Enter 发送）"></div>
-
-    <label style="display: flex; align-items: center; gap: 5px;">
-      <input type="checkbox" id="enableSearch">
-      联网搜索
-    </label>
-
-    <div id="preview-container">
-      <img id="preview-img" alt="预览图片">
-      <button id="remove-image-btn" title="移除图片">&times;</button>
-    </div>
-
-    <button id="send" title="发送消息">发送</button>
-    <button id="newTopic" title="开始新的对话">新话题</button>
-  </div>
-
-  <div id="viewer">
-    <img id="viewerImg" alt="查看图片">
-  </div>
-
-  <script>
-    // 工具函数
-    const $ = id => document.getElementById(id);
-
-    // DOM 元素引用
-    const historyBox = $("history");
-    const textInput = $("text-input");
-    const previewContainer = $("preview-container");
-    const previewImage = $("preview-img");
-    const removeImageBtn = $("remove-image-btn");
-    const sendBtn = $("send");
-    const newTopicBtn = $("newTopic");
-    const shotBtn = $("shotBtn");
-    const pickBtn = $("pickBtn");
-    const modelSelect = $("modelSelect");
-    const enableSearch = $("enableSearch");
-    const viewer = $("viewer");
-    const viewerImg = $("viewerImg");
-    const exportBtn = $("exportBtn");
-
-    // 状态变量
-    let imageBase64 = null;
-    let imageLocalURL = null;
-    let currentEventSource = null;
-
-    // 渲染数学表达式
-    function renderMath() {
-      if (window.renderMathInElement) {
-        renderMathInElement(document.body, {
-          delimiters: [
-            {left: "$$", right: "$$", display: true},
-            {left: "$", right: "$", display: false}
-          ],
-          throwOnError: false
-        });
-      }
-    }
-
-    // Markdown 转 HTML，处理换行问题
-    function md2html(txt) {
-      // 修复开头\\n问题
-      txt = txt.replace(/^\\n+/, '');
-
-      if (window.marked) {
-        marked.setOptions({
-          gfm: true,
-          breaks: true,
-          highlight: function(code, lang) {
-            return code;
-          }
-        });
-
-        if (typeof marked.parse === 'function') {
-          const html = marked.parse(txt);
-          return html;
-        }
-        if (typeof marked === 'function') {
-          const html = marked(txt);
-          return html;
-        }
-      }
-
-      return txt.replace(/&/g, "&amp;")
-               .replace(/</g, "&lt;")
-               .replace(/>/g, "&gt;")
-               .replace(/\\n/g, "<br>");
-    }
-
-    // 加载历史记录
-    async function loadHistory() {
-      try {
-        historyBox.innerHTML = '<div class="msg bot">加载历史记录中...</div>';
-        const r = await fetch('/history');
-
-        if (!r.ok) throw new Error(`HTTP error! status: ${r.status}`);
-
-        const arr = await r.json();
-        historyBox.innerHTML = '';
-
-        arr.forEach(obj => {
-          appendMsg(obj.md, obj.who, false);
-        });
-
-        historyBox.scrollTop = historyBox.scrollHeight;
-        renderMath(); // 渲染加载后的数学表达式
-      } catch (error) {
-        console.error("加载历史记录失败:", error);
-        historyBox.innerHTML = '<div class="msg bot">加载历史记录失败，请刷新页面或检查后端服务。</div>';
-      }
-    }
-
-    // 初始加载
-    document.addEventListener('DOMContentLoaded', function() {
-      loadHistory();
-
-      // 调整高度以填充整个视图
-      adjustHeight();
-      window.addEventListener('resize', adjustHeight);
-    });
-
-    // 调整高度，解决底部空白问题
-    function adjustHeight() {
-      const windowHeight = window.innerHeight;
-      const barHeight = $("bar").offsetHeight;
-      historyBox.style.height = `${windowHeight - barHeight}px`;
-      historyBox.style.maxHeight = `${windowHeight - barHeight}px`;
-    }
-
-    // 添加消息
-    function appendMsg(md, who, shouldScroll = true, isThinking = false) {
-      const div = document.createElement('div');
-      div.className = 'msg ' + who;
-
-      if (isThinking) {
-        div.classList.add('thinking');
-        div.innerHTML = md;
-      } else {
-        // 移除开头的换行符
-        md = md.replace(/^\\n+/, '');
-        div.innerHTML = md2html(md);
-
-        // 延迟渲染数学表达式，确保DOM已更新
-        setTimeout(() => {
-          renderMath();
-        }, 0);
-      }
-
-      historyBox.appendChild(div);
-
-      if (shouldScroll) {
-        setTimeout(() => {
-          historyBox.scrollTop = historyBox.scrollHeight;
-        }, 10);
-      }
-
-      return div;
-    }
-
-    // 重置输入区
-    function resetInputArea() {
-      textInput.innerHTML = '';
-      $("pick").value = '';
-      imageBase64 = null;
-      imageLocalURL = null;
-      previewImage.src = '';
-      previewContainer.style.display = 'none';
-      textInput.focus();
-    }
-
-    // 图片选择
-    pickBtn.onclick = () => $("pick").click();
-
-    $("pick").onchange = e => {
-      const file = e.target.files[0];
-      if (!file) return;
-
-      // 检查文件大小
-      if (file.size > 5 * 1024 * 1024) {
-        alert("图片大小不能超过5MB");
-        return;
-      }
-
-      const reader = new FileReader();
-      reader.onload = ev => {
-        imageLocalURL = ev.target.result;
-        imageBase64 = imageLocalURL.split(',')[1];
-        previewImage.src = imageLocalURL;
-        previewContainer.style.display = 'block';
-      };
-      reader.readAsDataURL(file);
-    };
-
-    // 截图功能
-    shotBtn.onclick = async () => {
-      shotBtn.disabled = true;
-      shotBtn.textContent = '截图中...';
-
-      try {
-        const r = await fetch('/screenshot', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          }
-        });
-
-        const data = await r.json();
-
-        if (data.img) {
-          imageBase64 = data.img;
-          imageLocalURL = 'data:image/png;base64,' + data.img;
-          previewImage.src = imageLocalURL;
-          previewContainer.style.display = 'block';
-        } else if (r.status !== 500) {
-          alert("截图失败或用户取消");
-        }
-      } catch (err) {
-        console.error("截图请求失败:", err);
-        alert("截图功能出错");
-      } finally {
-        shotBtn.disabled = false;
-        shotBtn.textContent = '屏幕截图';
-      }
-    };
-
-    // 移除图片
-    removeImageBtn.onclick = () => {
-      imageBase64 = null;
-      imageLocalURL = null;
-      $("pick").value = '';
-      previewImage.src = '';
-      previewContainer.style.display = 'none';
-      textInput.focus();
-    };
-
-    // 发送消息
-    sendBtn.onclick = async () => {
-      const txt = textInput.innerText.trim();
-
-      if (!txt && !imageBase64) {
-        alert("请输入内容或添加图片/截图");
-        return;
-      }
-
-      if (currentEventSource && currentEventSource.readyState !== EventSource.CLOSED) {
-        alert("请等待当前回复完成后再发送新消息。");
-        return;
-      }
-
-      const model = modelSelect.value;
-      const searchEnabled = enableSearch.checked;
-      const userTextToSend = txt;
-      const userImageToSend = imageBase64;
-      const userImageLocalURL = imageLocalURL;
-
-      // 添加用户消息到对话界面
-      let mdUser = '**你：**\n' + userTextToSend;
-      appendMsg(mdUser, 'user');
-
-      // 如果有图片，也添加到界面
-      if (userImageLocalURL) {
-        const imgDiv = document.createElement('div');
-        imgDiv.className = 'msg user';
-        imgDiv.style.padding = '0';
-        imgDiv.innerHTML = `<img src="${userImageLocalURL}" alt="用户上传图片" style="max-width:260px; border-radius:6px; margin-top:6px; display: block; margin-left: auto;">`;
-        historyBox.appendChild(imgDiv);
-        historyBox.scrollTop = historyBox.scrollHeight;
-      }
-
-      resetInputArea();
-      sendBtn.disabled = true;
-      sendBtn.textContent = '等待中...';
-
-      try {
-        // 发送消息到服务器
-        const r = await fetch('/chat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            text: userTextToSend,
-            image: userImageToSend,
-            model: model,
-            enable_search: searchEnabled
-          })
-        });
-
-        if (!r.ok) {
-          const errData = await r.json().catch(() => ({ error: '无法解析错误信息' }));
-          throw new Error(`服务器错误: ${r.status} - ${errData.error || '未知错误'}`);
-        }
-
-        const js = await r.json();
-
-        if (!js.ok) {
-          throw new Error("服务器未能成功处理用户消息");
-        }
-
-        // 创建等待提示
-        const botMsgDiv = appendMsg('**人工智能：**\n<span class="thinking">正在思考...</span>', 'bot', true, true);
-
-        let accumulatedMd = '**人工智能：**\n';
-        let isFirstChunk = true;
-
-        // 设置流式连接
-        const streamUrl = `/stream?model=${encodeURIComponent(model)}&enable_search=${searchEnabled}`;
-        currentEventSource = new EventSource(streamUrl);
-
-        // 流式处理
-        currentEventSource.onmessage = function(event) {
-          try {
-            const chunkData = JSON.parse(event.data);
-
-            if (isFirstChunk) {
-              botMsgDiv.classList.remove('thinking');
-              accumulatedMd = '**人工智能：**\n';
-              isFirstChunk = false;
-            }
-
-            accumulatedMd += chunkData.text;
-            botMsgDiv.innerHTML = md2html(accumulatedMd);
-
-            // 在添加内容后渲染数学表达式
-            renderMath();
-
-            historyBox.scrollTop = historyBox.scrollHeight;
-          } catch (e) {
-            console.error("解析 SSE 数据块失败:", e, "数据:", event.data);
-            botMsgDiv.innerHTML += "<br>[数据解析错误]";
-          }
-        };
-
-        // 流结束处理
-        currentEventSource.addEventListener('end', function(event) {
-          console.log("Stream ended:", event.data);
-          closeStream();
-          // 确保在流结束后再次渲染数学表达式
-          setTimeout(renderMath, 100);
-        });
-
-        // 流错误处理
-        currentEventSource.onerror = function(err) {
-          console.error("EventSource failed:", err);
-
-          if (isFirstChunk) {
-            botMsgDiv.innerHTML = md2html(accumulatedMd + '\\n\\n[连接错误或流中断]');
-            botMsgDiv.classList.remove('thinking');
-          } else {
-            botMsgDiv.innerHTML = md2html(accumulatedMd + '\\n\\n[连接错误或流中断]');
-          }
-
-          // 错误情况下也尝试渲染数学表达式
-          renderMath();
-          closeStream();
-        };
-      } catch(err) {
-        console.error("发送消息或连接流失败:", err);
-        appendMsg(`**错误：**\\n无法发送消息或连接到流服务。\\n${err.message}`, 'bot');
-        sendBtn.disabled = false;
-        sendBtn.textContent = '发送';
-      }
-    };
-
-    // 关闭流
-    function closeStream() {
-      if (currentEventSource) {
-        currentEventSource.close();
-        currentEventSource = null;
-        console.log("EventSource closed.");
-      }
-
-      sendBtn.disabled = false;
-      sendBtn.textContent = '发送';
-    }
-    // 修改导出按钮的点击事件
-    exportBtn.onclick = async () => {
-      try {
-        // 检查是否有对话历史
-        const historyResponse = await fetch('/history');
-        const historyData = await historyResponse.json();
-
-        if (!historyData || historyData.length === 0) {
-          alert("当前没有可导出的对话历史");
-          return;
-        }
-
-        exportBtn.disabled = true;
-        exportBtn.textContent = '导出中...';
-
-        // 请求导出
-        const response = await fetch('/export');
-
-        if (!response.ok) {
-          throw new Error(`导出失败: ${response.status}`);
-        }
-
-        // 获取文件名
-        const contentDisposition = response.headers.get('Content-Disposition');
-        let filename = '对话历史.html';
-        if (contentDisposition) {
-          const matches = /filename="(.+)"/.exec(contentDisposition);
-          if (matches) {
-            filename = matches[1];
-          }
-        }
-
-        // 下载文件
-        const blob = await response.blob();
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = filename;
-        document.body.appendChild(a);
-        a.click();
-        window.URL.revokeObjectURL(url);
-        document.body.removeChild(a);
-
-        console.log('对话历史导出成功');
-      } catch (error) {
-        console.error('导出失败:', error);
-        alert('导出对话历史失败: ' + error.message);
-      } finally {
-        exportBtn.disabled = false;
-        exportBtn.textContent = '导出';
-      }
-    };
-
-    // 新话题
-    newTopicBtn.onclick = async () => {
-      if (currentEventSource && currentEventSource.readyState !== EventSource.CLOSED) {
-        if (!confirm("当前回复仍在进行中，确定要强制开启新话题吗？")) return;
-        closeStream();
-      } else {
-        if (!confirm("确定要开启新话题？这会清空全部对话。")) return;
-      }
-
-      try {
-        await fetch('/reset', { method: 'POST' });
-        historyBox.innerHTML = '';
-        resetInputArea();
-        console.log("新话题已开启");
-      } catch (err) {
-        console.error("重置会话失败:", err);
-        alert("开启新话题失败，请检查后端服务。");
-      }
-    };
-
-    // 预览图片
-    previewImage.onclick = () => {
-      if (imageLocalURL) {
-        openViewer(imageLocalURL);
-      }
-    };
-
-    // 点击历史消息中的图片
-    historyBox.addEventListener('click', e => {
-      if (e.target.tagName === 'IMG') {
-        openViewer(e.target.src);
-      }
-    });
-
-    // 关闭图片查看器
-    viewer.onclick = () => {
-      viewer.style.opacity = '0';
-      setTimeout(() => {
-        viewer.style.display = 'none';
-        viewer.style.opacity = '1';
-      }, 300);
-    };
-
-    // 打开图片查看器
-    function openViewer(src) {
-      if (!src || src.startsWith('data:image/png;base64,' + '...')) return;
-
-      viewerImg.src = src;
-      viewer.style.display = 'flex';
-      viewer.classList.add('visible');
-    }
-
-    // 输入框快捷键
-    textInput.addEventListener("keydown", function(event) {
-      if (event.key === "Enter") {
-        if (!event.shiftKey) {
-          event.preventDefault();
-          sendBtn.click();
-        }
-      }
-    });
-
-    // 自动调整输入框高度
-    textInput.addEventListener('input', function() {
-      // 可以添加自动高度调整逻辑
-    });
-
-  </script>
+<div id="history"></div>
+<button id="exportBtn" title="导出对话历史">导出</button>
+
+
+<div id="bar">
+<select id="modelSelect">
+{% for model in models %}
+<option value="{{ model }}">{{ model }}</option>
+{% endfor %}
+</select>
+
+<input type="file" accept="image/*" id="pick" style="display:none">
+<button id="pickBtn" title="从设备选择图片">选择图片</button>
+<button id="shotBtn" title="捕获屏幕截图">屏幕截图</button>
+
+<div id="text-input" contenteditable="true" placeholder="输入内容…（Shift+Enter 换行/Enter 发送）"></div>
+
+<label style="display: flex; align-items: center; gap: 5px;">
+<input type="checkbox" id="enableSearch">
+联网搜索
+</label>
+
+<div id="preview-container">
+<img id="preview-img" alt="预览图片">
+<button id="remove-image-btn" title="移除图片">×</button>
+</div>
+
+<button id="send" title="发送消息">发送</button>
+<button id="newTopic" title="开始新的对话">新话题</button>
+</div>
+
+<div id="viewer">
+<img id="viewerImg" alt="查看图片">
+</div>
+
+<script>
+// 工具函数
+const $ = id => document.getElementById(id);
+
+// DOM 元素引用
+const historyBox = $("history");
+const textInput = $("text-input");
+const previewContainer = $("preview-container");
+const previewImage = $("preview-img");
+const removeImageBtn = $("remove-image-btn");
+const sendBtn = $("send");
+const newTopicBtn = $("newTopic");
+const shotBtn = $("shotBtn");
+const pickBtn = $("pickBtn");
+const modelSelect = $("modelSelect");
+const enableSearch = $("enableSearch");
+const viewer = $("viewer");
+const viewerImg = $("viewerImg");
+const exportBtn = $("exportBtn");
+
+// 状态变量
+let imageBase64 = null;
+let imageLocalURL = null;
+let currentEventSource = null;
+
+// 渲染数学表达式
+function renderMath() {
+if (window.renderMathInElement) {
+renderMathInElement(document.body, {
+delimiters: [
+{left: "$$", right: "$$", display: true},
+{left: "$", right: "$", display: false}
+],
+throwOnError: false
+});
+}
+}
+
+// 添加复制按钮到代码块
+function addCopyButtons() {
+const codeBlocks = document.querySelectorAll('pre');
+codeBlocks.forEach((pre, index) => {
+// 检查是否已经有复制按钮
+if (pre.querySelector('.copy-btn')) {
+return;
+}
+
+
+// 创建复制按钮
+const copyBtn = document.createElement('button');
+copyBtn.className = 'copy-btn';
+copyBtn.textContent = '复制';
+copyBtn.dataset.codeIndex = index;
+
+
+// 设置按钮位置的函数
+const positionButton = () => {
+const preRect = pre.getBoundingClientRect();
+const scrollHeight = pre.scrollHeight;
+const clientHeight = pre.clientHeight;
+
+
+// 判断是否有滚动条
+if (scrollHeight > clientHeight) {
+// 有滚动条，放在右下角
+copyBtn.style.right = '10px';
+copyBtn.style.bottom = '10px';
+copyBtn.style.top = 'auto';
+} else {
+// 无滚动条，放在右上角
+copyBtn.style.right = '10px';
+copyBtn.style.top = '10px';
+copyBtn.style.bottom = 'auto';
+}
+};
+
+
+// 初始定位
+positionButton();
+
+
+// 监听窗口大小变化
+window.addEventListener('resize', positionButton);
+
+
+// 复制功能
+copyBtn.onclick = async () => {
+const codeElement = pre.querySelector('code');
+const textToCopy = codeElement ? codeElement.textContent : pre.textContent;
+
+
+try {
+await navigator.clipboard.writeText(textToCopy);
+copyBtn.textContent = '已复制';
+copyBtn.classList.add('copied');
+setTimeout(() => {
+copyBtn.textContent = '复制';
+copyBtn.classList.remove('copied');
+}, 2000);
+} catch (err) {
+// 降级方案
+const textArea = document.createElement('textarea');
+textArea.value = textToCopy;
+textArea.style.position = 'absolute';
+textArea.style.left = '-9999px';
+document.body.appendChild(textArea);
+textArea.select();
+try {
+document.execCommand('copy');
+copyBtn.textContent = '已复制';
+copyBtn.classList.add('copied');
+setTimeout(() => {
+copyBtn.textContent = '复制';
+copyBtn.classList.remove('copied');
+}, 2000);
+} catch (err) {
+console.error('复制失败:', err);
+alert('复制失败，请手动选择复制');
+}
+document.body.removeChild(textArea);
+}
+};
+
+pre.appendChild(copyBtn);
+});
+}
+
+// Markdown 转 HTML，处理换行问题
+function md2html(txt) {
+// 修复开头\\\\n问题
+txt = txt.replace(/^\\\\n+/, '');
+
+if (window.marked) {
+marked.setOptions({
+gfm: true,
+breaks: true,
+highlight: function(code, lang) {
+return code;
+}
+});
+
+if (typeof marked.parse === 'function') {
+const html = marked.parse(txt);
+return html;
+}
+if (typeof marked === 'function') {
+const html = marked(txt);
+return html;
+}
+}
+
+return txt.replace(/&/g, "&amp;")
+.replace(/</g, "&lt;")
+.replace(/>/g, "&gt;")
+.replace(/\\\\n/g, "<br>");
+}
+
+// 加载历史记录
+async function loadHistory() {
+try {
+historyBox.innerHTML = '<div class="msg bot">加载历史记录中...</div>';
+const r = await fetch('/history');
+
+if (!r.ok) throw new Error(`HTTP error! status: ${r.status}`);
+
+const arr = await r.json();
+historyBox.innerHTML = '';
+
+arr.forEach(obj => {
+appendMsg(obj.md, obj.who, false);
+});
+
+historyBox.scrollTop = historyBox.scrollHeight;
+renderMath(); // 渲染加载后的数学表达式
+// 为已有的代码块添加复制按钮
+setTimeout(addCopyButtons, 100);
+} catch (error) {
+console.error("加载历史记录失败:", error);
+historyBox.innerHTML = '<div class="msg bot">加载历史记录失败，请刷新页面或检查后端服务。</div>';
+}
+}
+
+// 初始加载
+document.addEventListener('DOMContentLoaded', function() {
+loadHistory();
+
+// 调整高度以填充整个视图
+adjustHeight();
+window.addEventListener('resize', adjustHeight);
+});
+
+// 调整高度，解决底部空白问题
+function adjustHeight() {
+const windowHeight = window.innerHeight;
+const barHeight = $("bar").offsetHeight;
+historyBox.style.height = `${windowHeight - barHeight}px`;
+historyBox.style.maxHeight = `${windowHeight - barHeight}px`;
+}
+
+// 添加消息
+function appendMsg(md, who, shouldScroll = true, isThinking = false) {
+const div = document.createElement('div');
+div.className = 'msg ' + who;
+
+if (isThinking) {
+div.classList.add('thinking');
+div.innerHTML = md;
+} else {
+// 移除开头的换行符
+md = md.replace(/^\\\\n+/, '');
+div.innerHTML = md2html(md);
+
+// 延迟渲染数学表达式和添加复制按钮
+setTimeout(() => {
+renderMath();
+addCopyButtons();
+}, 0);
+}
+
+historyBox.appendChild(div);
+
+if (shouldScroll) {
+setTimeout(() => {
+historyBox.scrollTop = historyBox.scrollHeight;
+}, 10);
+}
+
+return div;
+}
+
+// 重置输入区
+function resetInputArea() {
+textInput.innerHTML = '';
+$("pick").value = '';
+imageBase64 = null;
+imageLocalURL = null;
+previewImage.src = '';
+previewContainer.style.display = 'none';
+textInput.focus();
+}
+
+// 图片选择
+pickBtn.onclick = () => $("pick").click();
+
+$("pick").onchange = e => {
+const file = e.target.files[0];
+if (!file) return;
+
+// 检查文件大小
+if (file.size > 5 * 1024 * 1024) {
+alert("图片大小不能超过5MB");
+return;
+}
+
+const reader = new FileReader();
+reader.onload = ev => {
+imageLocalURL = ev.target.result;
+imageBase64 = imageLocalURL.split(',')[1];
+previewImage.src = imageLocalURL;
+previewContainer.style.display = 'block';
+};
+reader.readAsDataURL(file);
+};
+
+// 截图功能
+shotBtn.onclick = async () => {
+shotBtn.disabled = true;
+shotBtn.textContent = '截图中...';
+
+try {
+const r = await fetch('/screenshot', {
+method: 'POST',
+headers: {
+'Content-Type': 'application/json'
+}
+});
+
+const data = await r.json();
+
+if (data.img) {
+imageBase64 = data.img;
+imageLocalURL = 'data:image/png;base64,' + data.img;
+previewImage.src = imageLocalURL;
+previewContainer.style.display = 'block';
+} else if (r.status !== 500) {
+alert("截图失败或用户取消");
+}
+} catch (err) {
+console.error("截图请求失败:", err);
+alert("截图功能出错");
+} finally {
+shotBtn.disabled = false;
+shotBtn.textContent = '屏幕截图';
+}
+};
+
+// 移除图片
+removeImageBtn.onclick = () => {
+imageBase64 = null;
+imageLocalURL = null;
+$("pick").value = '';
+previewImage.src = '';
+previewContainer.style.display = 'none';
+textInput.focus();
+};
+
+// 发送消息
+sendBtn.onclick = async () => {
+const txt = textInput.innerText.trim();
+
+if (!txt && !imageBase64) {
+alert("请输入内容或添加图片/截图");
+return;
+}
+
+if (currentEventSource && currentEventSource.readyState !== EventSource.CLOSED) {
+alert("请等待当前回复完成后再发送新消息。");
+return;
+}
+
+const model = modelSelect.value;
+const searchEnabled = enableSearch.checked;
+const userTextToSend = txt;
+const userImageToSend = imageBase64;
+const userImageLocalURL = imageLocalURL;
+
+// 添加用户消息到对话界面
+let mdUser = '你：\n' + userTextToSend;
+appendMsg(mdUser, 'user');
+
+// 如果有图片，也添加到界面
+if (userImageLocalURL) {
+const imgDiv = document.createElement('div');
+imgDiv.className = 'msg user';
+imgDiv.style.padding = '0';
+imgDiv.innerHTML = `<img src="${userImageLocalURL}" alt="用户上传图片" style="max-width:260px; border-radius:6px; margin-top:6px; display: block; margin-left: auto;">`;
+historyBox.appendChild(imgDiv);
+historyBox.scrollTop = historyBox.scrollHeight;
+}
+
+resetInputArea();
+sendBtn.disabled = true;
+sendBtn.textContent = '等待中...';
+
+try {
+// 发送消息到服务器
+const r = await fetch('/chat', {
+method: 'POST',
+headers: { 'Content-Type': 'application/json' },
+body: JSON.stringify({
+text: userTextToSend,
+image: userImageToSend,
+model: model,
+enable_search: searchEnabled
+})
+});
+
+if (!r.ok) {
+const errData = await r.json().catch(() => ({ error: '无法解析错误信息' }));
+throw new Error(`服务器错误: ${r.status} - ${errData.error || '未知错误'}`);
+}
+
+const js = await r.json();
+
+if (!js.ok) {
+throw new Error("服务器未能成功处理用户消息");
+}
+
+// 创建等待提示
+const botMsgDiv = appendMsg('人工智能：\n<span class="thinking">正在思考...</span>', 'bot', true, true);
+
+let accumulatedMd = '人工智能：\n';
+let isFirstChunk = true;
+
+// 设置流式连接
+const streamUrl = `/stream?model=${encodeURIComponent(model)}&enable_search=${searchEnabled}`;
+currentEventSource = new EventSource(streamUrl);
+
+// 流式处理
+currentEventSource.onmessage = function(event) {
+try {
+const chunkData = JSON.parse(event.data);
+
+if (isFirstChunk) {
+botMsgDiv.classList.remove('thinking');
+accumulatedMd = '人工智能：\n';
+isFirstChunk = false;
+}
+
+accumulatedMd += chunkData.text;
+botMsgDiv.innerHTML = md2html(accumulatedMd);
+
+// 在添加内容后渲染数学表达式和添加复制按钮
+renderMath();
+addCopyButtons();
+
+historyBox.scrollTop = historyBox.scrollHeight;
+} catch (e) {
+console.error("解析 SSE 数据块失败:", e, "数据:", event.data);
+botMsgDiv.innerHTML += "<br>[数据解析错误]";
+}
+};
+
+// 流结束处理
+currentEventSource.addEventListener('end', function(event) {
+console.log("Stream ended:", event.data);
+closeStream();
+// 确保在流结束后再次渲染数学表达式和添加复制按钮
+setTimeout(() => {
+renderMath();
+addCopyButtons();
+}, 100);
+});
+
+// 流错误处理
+currentEventSource.onerror = function(err) {
+console.error("EventSource failed:", err);
+
+if (isFirstChunk) {
+botMsgDiv.innerHTML = md2html(accumulatedMd + '\\\\n\\\\n[连接错误或流中断]');
+botMsgDiv.classList.remove('thinking');
+} else {
+botMsgDiv.innerHTML = md2html(accumulatedMd + '\\\\n\\\\n[连接错误或流中断]');
+}
+
+// 错误情况下也尝试渲染数学表达式和添加复制按钮
+renderMath();
+addCopyButtons();
+closeStream();
+};
+} catch(err) {
+console.error("发送消息或连接流失败:", err);
+appendMsg(`**错误：**\\\\n无法发送消息或连接到流服务。\\\\n${err.message}`, 'bot');
+sendBtn.disabled = false;
+sendBtn.textContent = '发送';
+}
+};
+
+// 关闭流
+function closeStream() {
+if (currentEventSource) {
+currentEventSource.close();
+currentEventSource = null;
+console.log("EventSource closed.");
+}
+
+sendBtn.disabled = false;
+sendBtn.textContent = '发送';
+}
+
+// 修改导出按钮的点击事件
+exportBtn.onclick = async () => {
+try {
+// 检查是否有对话历史
+const historyResponse = await fetch('/history');
+const historyData = await historyResponse.json();
+
+if (!historyData || historyData.length === 0) {
+alert("当前没有可导出的对话历史");
+return;
+}
+
+exportBtn.disabled = true;
+exportBtn.textContent = '导出中...';
+
+// 请求导出
+const response = await fetch('/export');
+
+if (!response.ok) {
+throw new Error(`导出失败: ${response.status}`);
+}
+
+// 获取文件名
+const contentDisposition = response.headers.get('Content-Disposition');
+let filename = '对话历史.html';
+if (contentDisposition) {
+const matches = /filename="(.+)"/.exec(contentDisposition);
+if (matches) {
+filename = matches[1];
+}
+}
+
+// 下载文件
+const blob = await response.blob();
+const url = window.URL.createObjectURL(blob);
+const a = document.createElement('a');
+a.href = url;
+a.download = filename;
+document.body.appendChild(a);
+a.click();
+window.URL.revokeObjectURL(url);
+document.body.removeChild(a);
+
+console.log('对话历史导出成功');
+} catch (error) {
+console.error('导出失败:', error);
+alert('导出对话历史失败: ' + error.message);
+} finally {
+exportBtn.disabled = false;
+exportBtn.textContent = '导出';
+}
+};
+
+// 新话题
+newTopicBtn.onclick = async () => {
+if (currentEventSource && currentEventSource.readyState !== EventSource.CLOSED) {
+if (!confirm("当前回复仍在进行中，确定要强制开启新话题吗？")) return;
+closeStream();
+} else {
+if (!confirm("确定要开启新话题？这会清空全部对话。")) return;
+}
+
+try {
+await fetch('/reset', { method: 'POST' });
+historyBox.innerHTML = '';
+resetInputArea();
+console.log("新话题已开启");
+} catch (err) {
+console.error("重置会话失败:", err);
+alert("开启新话题失败，请检查后端服务。");
+}
+};
+
+// 预览图片
+previewImage.onclick = () => {
+if (imageLocalURL) {
+openViewer(imageLocalURL);
+}
+};
+
+// 点击历史消息中的图片
+historyBox.addEventListener('click', e => {
+if (e.target.tagName === 'IMG') {
+openViewer(e.target.src);
+}
+});
+
+// 关闭图片查看器
+viewer.onclick = () => {
+viewer.style.opacity = '0';
+setTimeout(() => {
+viewer.style.display = 'none';
+viewer.style.opacity = '1';
+}, 300);
+};
+
+// 打开图片查看器
+function openViewer(src) {
+if (!src || src.startsWith('data:image/png;base64,' + '...')) return;
+
+viewerImg.src = src;
+viewer.style.display = 'flex';
+viewer.classList.add('visible');
+}
+
+// 输入框快捷键
+textInput.addEventListener("keydown", function(event) {
+if (event.key === "Enter") {
+if (!event.shiftKey) {
+event.preventDefault();
+sendBtn.click();
+}
+}
+});
+
+// 自动调整输入框高度
+textInput.addEventListener('input', function() {
+// 可以添加自动高度调整逻辑
+});
+
+</script>
 </body>
 </html>
