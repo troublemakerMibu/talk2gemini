@@ -1,99 +1,246 @@
-import yaml, pathlib
-from threading import Lock
+import yaml
+import pathlib
+import logging
+import json  # <<< 新增引入
+from threading import RLock
 from datetime import timedelta, datetime
 
+# ================== 日志配置 ==================
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - [%(levelname)s] - %(message)s')
+
+# ================== 路径配置 ==================
 BASE_DIR = pathlib.Path(__file__).resolve().parent
 CFG_PATH = BASE_DIR / "config.yaml"
 KEY_PATH = BASE_DIR / "key.txt"
-# 线程安全的API密钥管理器
+# <<< 核心改动：为持久化挂起状态新增JSON文件路径 >>>
+SUSPENDED_KEYS_PATH = BASE_DIR / "suspended_keys.json"
+
+
+# ================== 自定义异常 ==================
+class NoAvailableKeysError(Exception):
+    """当所有API密钥都不可用时抛出此异常，让上层应用可以清晰地捕获。"""
+    pass
+
+
+# ================== 优化的 APIKeyManager (JSON持久化版本) ==================
 class APIKeyManager:
-    def __init__(self):
-        self.lock = Lock()
-        self.api_keys = []
+    """
+    一个经过优化的、线程安全的API密钥管理器。
+    增加了对挂起状态的持久化功能。
+    """
+
+    def __init__(self, key_path: pathlib.Path, suspended_keys_path: pathlib.Path, config: dict = None):
+        """
+        通过依赖注入初始化，更灵活且易于测试。
+        :param key_path: 密钥文件路径。
+        :param suspended_keys_path: 挂起密钥状态的持久化文件路径。
+        :param config: 从 YAML 加载的配置字典。
+        """
+        if not key_path.exists():
+            raise FileNotFoundError(f"密钥文件不存在: {key_path}")
+
+        self.key_path = key_path
+        self.suspended_keys_path = suspended_keys_path  # <<< 核心改动
+        self.config = config or {}
+        self.lock = RLock()
+
+        self.api_keys = self._load_keys()
+        # <<< 核心改动：从JSON文件加载挂起状态 >>>
+        self.suspended_keys = self._load_suspended_keys()
         self.current_index = 0
-        self.invalid_keys = set()
-        self.suspended_keys = {}
-        self.load_keys()
 
-    def load_keys(self):
-        """从 key.txt 加载去重后的密钥"""
-        with self.lock:
+        # 启动时清理一次过期的挂起记录
+        self._cleanup_expired_suspensions()
+
+    def _load_keys(self) -> list:
+        """从文件中加载去重后的密钥（内部方法）。"""
+        try:
+            with open(self.key_path, 'r') as f:
+                raw_keys = [line.strip() for line in f if line.strip()]
+                unique_keys = list(dict.fromkeys(raw_keys))
+                logging.info(f"成功加载 {len(unique_keys)} 个唯一密钥。")
+                return unique_keys
+        except Exception as e:
+            logging.error(f"读取密钥文件 {self.key_path} 失败: {e}", exc_info=True)
+            raise
+
+    # <<< 核心改动：新增方法，从JSON文件加载挂起状态 >>>
+    def _load_suspended_keys(self) -> dict:
+        """从JSON文件中加载挂起的密钥及其恢复时间。"""
+        if not self.suspended_keys_path.exists():
+            return {}
+        try:
+            with open(self.suspended_keys_path, 'r') as f:
+                # 从文件中加载的挂起数据
+                suspended_data = json.load(f)
+                # 将ISO时间字符串转换回datetime对象
+                return {
+                    key: datetime.fromisoformat(ts)
+                    for key, ts in suspended_data.items()
+                }
+        except (json.JSONDecodeError, FileNotFoundError):
+            # 如果文件为空、不存在或损坏，返回一个空字典
+            logging.warning(f"无法加载或解析 {self.suspended_keys_path}，将从空的挂起列表开始。")
+            return {}
+
+    # <<< 核心改动：新增方法，将挂起状态保存到JSON文件 >>>
+    def _save_suspended_keys(self):
+        """将当前的挂起密钥字典保存到JSON文件。"""
+        with self.lock:  # 确保在写入时数据一致
             try:
-                with open(KEY_PATH, 'r') as f:
-                    raw_keys = [line.strip() for line in f if line.strip()]
-                    # 保留顺序去重
-                    self.api_keys = []
-                    [self.api_keys.append(k) for k in raw_keys if k not in self.api_keys]
+                # 将datetime对象转换为ISO格式字符串以便JSON序列化
+                data_to_save = {
+                    key: dt.isoformat()
+                    for key, dt in self.suspended_keys.items()
+                }
+                with open(self.suspended_keys_path, 'w') as f:
+                    json.dump(data_to_save, f, indent=4)
             except Exception as e:
-                raise RuntimeError(f"读取密钥文件失败: {e}")
+                logging.error(f"保存挂起状态到 {self.suspended_keys_path} 失败: {e}", exc_info=True)
 
-    def get_next_key(self):
-        """获取下一个有效密钥，跳过失效和挂起的密钥"""
+    def _cleanup_expired_suspensions(self):
+        """清理已过期的挂起条目，并在需要时更新文件。"""
         with self.lock:
             now = datetime.now()
-            valid_keys = [
-                k for k in self.api_keys
-                if k not in self.invalid_keys and
-                (k not in self.suspended_keys or self.suspended_keys[k] <= now)
-            ]
-            if not valid_keys:
-                raise RuntimeError("所有密钥均已失效或处于冷却期，请稍后再试")
-            key = valid_keys[self.current_index % len(valid_keys)]
-            self.current_index += 1
-            return key
+            initial_count = len(self.suspended_keys)
 
+            # 找出所有未过期的条目
+            active_suspensions = {
+                key: resume_time
+                for key, resume_time in self.suspended_keys.items()
+                if resume_time > now
+            }
 
-    def mark_key_invalid(self, key):
-        """标记密钥为失效，并从 key.txt 中删除"""
+            if len(active_suspensions) < initial_count:
+                logging.info(f"启动时清理了 {initial_count - len(active_suspensions)} 个已过期的挂起密钥。")
+                self.suspended_keys = active_suspensions
+                self._save_suspended_keys()
+
+    def get_key(self, preferred_key: str = None) -> str:
+        """
+        获取一个可用的API密钥。
+        如果提供了 preferred_key 且其可用，则优先返回它（实现“粘性”）。
+        否则，按顺序轮询获取下一个可用密钥。
+        """
         with self.lock:
+            if not self.api_keys:
+                raise NoAvailableKeysError("密钥池为空，请在文件中添加密钥。")
+
+            now = datetime.now()
+
+            # 1. 检查首选密钥
+            if preferred_key and preferred_key in self.api_keys:
+                if not self._is_key_suspended(preferred_key, now):
+                    return preferred_key
+
+            # 2. 轮询获取可用密钥
+            for i in range(len(self.api_keys)):
+                key_index = (self.current_index + i) % len(self.api_keys)
+                key = self.api_keys[key_index]
+
+                if key == preferred_key:
+                    continue
+
+                if not self._is_key_suspended(key, now):
+                    self.current_index = (key_index + 1) % len(self.api_keys)
+                    return key
+
+            raise NoAvailableKeysError("所有密钥均处于冷却期，请稍后再试。")
+
+    def _is_key_suspended(self, key: str, now: datetime) -> bool:
+        """检查一个密钥是否处于挂起状态（内部辅助方法）。"""
+        resume_time = self.suspended_keys.get(key)
+        if resume_time:
+            if now >= resume_time:
+                # 冷却期结束，恢复密钥
+                del self.suspended_keys[key]
+                logging.info(f"密钥 {key}... 已从挂起状态恢复。")
+                # <<< 核心改动：持久化恢复状态 >>>
+                self._save_suspended_keys()
+                return False
+            else:
+                return True
+        return False
+
+    def mark_key_invalid(self, key: str):
+        """将一个密钥标记为永久失效，从池中移除并更新文件。"""
+        with self.lock:
+            key_was_suspended = key in self.suspended_keys
+
             if key in self.api_keys:
                 self.api_keys.remove(key)
-            self.invalid_keys.add(key)
-            self.save_keys()  # 保存更新后的密钥列表
+                if key_was_suspended:
+                    del self.suspended_keys[key]
 
-    def get_status(self):
-        """获取当前密钥状态（用于监控）"""
-        return {
-            "valid_keys": len(self.api_keys) - len(self.invalid_keys),
-            "total_keys": len(self.api_keys),
-            "invalid_keys": len(self.invalid_keys),
-            "suspended_keys": len(self.suspended_keys),
-        }
-    def save_keys(self):
-        try:
-            with open(KEY_PATH, 'w') as f:
-                for key in self.api_keys:
-                    f.write(f"{key}\n")
-        except Exception as e:
-            print(f"[错误] 保存密钥文件失败: {e}")
+                logging.warning(f"密钥 {key}... 已被标记为永久失效，将从池中移除。")
+                self._save_keys_to_file()
 
-    def temporarily_suspend_key(self, key, cooldown=300):
-        """
-        将密钥临时挂起，设定恢复时间
-        :param key: 被挂起的密钥
-        :param cooldown: 挂起时间（秒）
-        """
+                # <<< 核心改动：如果从挂起列表中移除了key，则需要保存状态 >>>
+                if key_was_suspended:
+                    self._save_suspended_keys()
+
+                if self.current_index >= len(self.api_keys) and self.api_keys:
+                    self.current_index = 0
+
+    def temporarily_suspend_key(self, key: str):
+        """将指定的密钥临时挂起，并将状态持久化。"""
+        cooldown = self.config.get('cooldown_seconds', 300)
         with self.lock:
             if key in self.api_keys:
-                self.suspended_keys[key] = datetime.now() + timedelta(seconds=cooldown)
+                resume_time = datetime.now() + timedelta(seconds=cooldown)
+                self.suspended_keys[key] = resume_time
+                logging.info(
+                    f"密钥 {key}... 已被临时挂起，将在 {cooldown} 秒后于 {resume_time.strftime('%Y-%m-%d %H:%M:%S')} 恢复。")
+                # <<< 核心改动：持久化挂起状态 >>>
+                self._save_suspended_keys()
+
+    def get_status(self) -> dict:
+        """获取当前密钥管理器的状态，用于监控。"""
+        with self.lock:
+            # 刷新一次状态，确保计数准确
+            self._cleanup_expired_suspensions()
+
+            return {
+                "total_keys_in_pool": len(self.api_keys),
+                "available_keys": len(self.api_keys) - len(self.suspended_keys),
+                "suspended_keys_count": len(self.suspended_keys),
+            }
+
+    def _save_keys_to_file(self):
+        """将当前有效的密钥列表写回文件（内部方法）。"""
+        try:
+            with open(self.key_path, 'w') as f:
+                for key in self.api_keys:
+                    f.write(f"{key}\n")
+            logging.info(f"成功将 {len(self.api_keys)} 个有效密钥保存到 {self.key_path}。")
+        except Exception as e:
+            logging.error(f"保存密钥文件 {self.key_path} 失败: {e}", exc_info=True)
 
 
-# 初始化密钥管理器
-key_manager = APIKeyManager()
+# ================== 配置加载与实例化 ==================
 def load_yaml(path=CFG_PATH):
     if not path.exists():
         raise FileNotFoundError(f"缺少配置文件 {path}")
     with open(path, 'r', encoding='utf-8') as f:
         return yaml.safe_load(f)
 
+
 _yaml = load_yaml()
 
-# ============ 供外部直接 import 使用 =============
-# API_KEY        = _yaml.get("api_key")
-MODEL_BASE_URL = _yaml["base_url"]  # 只保留基础URL
-THRESHOLD_KB   = int(_yaml.get("threshold_kb"))
-PORT           = int(_yaml.get("port"))
-BASE_PROMPT    = _yaml.get("base_prompt")
-MODELS         = _yaml.get("models", [])  # 读取模型列表
-# if not API_KEY:
-#     raise RuntimeError("请配置api_key")
+try:
+    # <<< 核心改动：在实例化时传入新增的路径参数 >>>
+    key_manager = APIKeyManager(
+        key_path=KEY_PATH,
+        suspended_keys_path=SUSPENDED_KEYS_PATH,
+        config=_yaml
+    )
+except FileNotFoundError as e:
+    logging.critical(f"密钥管理器初始化失败: {e}")
+    exit(1)
+
+# ================== 供外部直接 import 使用的配置项 ==================
+MODEL_BASE_URL = _yaml["base_url"]
+THRESHOLD_KB = int(_yaml.get("threshold_kb", 3600))
+PORT = int(_yaml.get("port", 5000))
+BASE_PROMPT = _yaml.get("base_prompt", "")
+MODELS = _yaml.get("models", [])
