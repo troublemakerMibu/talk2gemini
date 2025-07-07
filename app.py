@@ -35,14 +35,12 @@ def reset():
     return jsonify({'ok': True})
 
 # ----------------- 调用大模型 (流式) -----------------
-# app.py 中 stream_gemini_response 的新版本
-
 def stream_gemini_response(history, model, tools=None):
     global current_bot_response_full, chat_history, last_successful_key
     current_bot_response_full = ""
 
-    # 【变化】从新的 status 字典获取总密钥数作为最大重试次数
-    max_retries = key_manager.get_status()["total_keys_in_pool"]
+    # 获取可用密钥数作为最大重试次数
+    max_retries = key_manager.get_status()["available_keys"]
     if max_retries == 0:
         error_msg = "错误：密钥池中没有可用的密钥。"
         current_bot_response_full = error_msg
@@ -53,10 +51,10 @@ def stream_gemini_response(history, model, tools=None):
     for attempt in range(max_retries):
         api_key = None  # 在 try 外部定义，便于 except 块中引用
         try:
-            # 【核心改动】调用新的 get_key 方法，并传入上一次成功的 key 作为首选
+            # 调用新的 get_key 方法，并传入上一次成功的 key 作为首选
             api_key = key_manager.get_key(preferred_key=last_successful_key)
 
-            print(f"正在使用 API Key: {api_key}... (尝试 {attempt + 1}/{max_retries})")
+            print(f"正在使用 API Key: {api_key} (尝试 {attempt + 1}/{max_retries})")
             url = f"{MODEL_BASE_URL}{model}:streamGenerateContent?alt=sse&key={api_key}"
             payload = {"contents": history}
             if tools:
@@ -68,6 +66,7 @@ def stream_gemini_response(history, model, tools=None):
                 if 'text/event-stream' not in resp.headers.get('Content-Type', ''):
                     raise ValueError("响应非流式格式，请检查API端点或密钥权限。")
 
+                # 流式处理响应
                 for line in resp.iter_lines():
                     if line:
                         decoded_line = line.decode('utf-8')
@@ -81,13 +80,14 @@ def stream_gemini_response(history, model, tools=None):
                                 print(f"解析响应数据块失败: {e}")
                                 pass  # 忽略解析失败的行
 
-                # 成功完成流，直接跳出重试循环
-                # 【核心改动】请求成功，记录下这个key
+                # 成功完成流，记录成功并跳出重试循环
+                # 【新增】记录成功的API调用
+                key_manager.record_success(api_key)
                 last_successful_key = api_key
                 break
 
         except NoAvailableKeysError as e:
-            # 【变化】捕获我们自定义的异常
+            # 捕获自定义的异常
             print(f"获取密钥失败: {e}")
             error_msg = f"错误: {e}"
             current_bot_response_full = error_msg
@@ -95,30 +95,42 @@ def stream_gemini_response(history, model, tools=None):
             break  # 没有可用密钥了，直接结束
 
         except requests.exceptions.HTTPError as e:
-            # 【变化】调用 suspend/mark_invalid 时不再需要传入 cooldown 参数
-            print(f"请求失败 (API Key: {api_key}...): {e}")
-            if e.response.status_code == 429:
+            # 调用 suspend/mark_invalid 时不再需要传入 cooldown 参数
+            print(f"请求失败 (API Key: {api_key}): {e}")
+            status_code = e.response.status_code
+
+            # 【新增】记录失败的API调用
+            if api_key:
+                key_manager.record_failure(api_key, status_code)
+
+            # 根据错误代码处理密钥
+            if status_code == 429:
                 key_manager.temporarily_suspend_key(api_key)
-            elif e.response.status_code in [400, 403]:
+            elif status_code in [400, 403]:
                 key_manager.mark_key_invalid(api_key)
-            elif e.response.status_code >= 500:
+            elif status_code >= 500:
                 key_manager.temporarily_suspend_key(api_key)
             else:
                 key_manager.mark_key_invalid(api_key)
 
             if attempt >= max_retries - 1:  # 如果是最后一次尝试
-                error_msg = f"所有密钥均尝试失败。最后错误状态码: {e.response.status_code}"
+                error_msg = f"所有密钥均尝试失败。最后错误状态码: {status_code}"
                 current_bot_response_full = error_msg
                 yield f"data: {json.dumps({'text': error_msg})}\n\n"
 
         except Exception as e:
             print(f"处理流时发生未知错误: {e}")
+            # 【新增】记录未知错误
+            if api_key:
+                key_manager.record_failure(api_key, 0)  # 使用 0 表示未知错误
             error_msg = f"处理流失败: {e}"
             current_bot_response_full = error_msg
             yield f"data: {json.dumps({'text': error_msg})}\n\n"
             break  # 发生未知严重错误，终止重试
 
-    print(f"当前密钥状态: {key_manager.get_status()}")
+    # 【修改】简化状态输出
+    status = key_manager.get_status()
+    print(f"当前密钥状态: 可用： {status['available_keys']}, 被挂起： {status['suspended_keys']}")
 
     # 将模型回复添加到 chat_history
     if current_bot_response_full:
@@ -129,6 +141,8 @@ def stream_gemini_response(history, model, tools=None):
 
     yield f"event: end\ndata: [DONE]\n\n"
     time.sleep(0.1)
+
+
 
 @app.route('/export', methods=['GET'])
 def export_history():
@@ -760,107 +774,8 @@ def export_history():
     return response
 
 
-    # 修改markdown2的处理，为代码块添加包装器
-    def process_code_blocks(html_content):
-        """为代码块添加复制按钮"""
-        import re
-        import uuid
-
-        def wrap_code_block(match):
-            code_block = match.group(0)
-            code_id = f"code-{uuid.uuid4().hex[:8]}"
-
-            # 提取代码内容（去除<pre><code>标签）
-            code_match = re.search(r'<pre><code[^>]*>(.*?)</code></pre>', code_block, re.DOTALL)
-            if code_match:
-                # 创建包装器
-                wrapped = f'''<div class="code-block-wrapper">
-                    <button class="copy-button" onclick="copyCode(this, '{code_id}')">
-                        复制
-                    </button>
-                    <pre><code id="{code_id}">{code_match.group(1)}</code></pre>
-                </div>'''
-                return wrapped
-            return code_block
-
-        # 查找所有代码块并添加包装器
-        html_content = re.sub(r'<pre><code[^>]*>.*?</code></pre>', wrap_code_block, html_content, flags=re.DOTALL)
-        return html_content
-
-    # 构建消息HTML
-    messages_html = []
-    message_count = 0
-
-    for msg in chat_history:
-        message_count += 1
-        role = msg['role']
-        role_display = '用户' if role == 'user' else 'AI助手'
-        message_class = 'user' if role == 'user' else 'bot'
-        avatar_text = '我' if role == 'user' else 'AI'
-
-        content_parts = []
-        for part in msg.get('parts', []):
-            if 'text' in part:
-                # 先处理数学公式
-                text_with_math = process_math_formulas(part['text'])
-
-                # 转换Markdown到HTML
-                text_html = markdown2.markdown(
-                    text_with_math,
-                    extras=['fenced-code-blocks', 'tables', 'break-on-newline', 'code-friendly']
-                )
-
-                # 为代码块添加复制按钮
-                text_html = process_code_blocks(text_html)
-
-                content_parts.append(text_html)
-            elif 'inline_data' in part:
-                # 嵌入图片
-                img_html = f'<img src="data:{part["inline_data"]["mime_type"]};base64,{part["inline_data"]["data"]}" alt="图片">'
-                content_parts.append(img_html)
-
-        # 改进的消息HTML结构
-        message_html = f'''
-        <div class="message {message_class}">
-            <div class="message-header">
-                <div class="avatar">{avatar_text}</div>
-                <div class="message-role">{role_display}</div>
-            </div>
-            <div class="message-content">
-                {''.join(content_parts)}
-            </div>
-        </div>
-        '''
-        messages_html.append(message_html)
-
-    # 填充模板
-    html_content = html_template.format(
-        title=now.strftime("%Y年%m月%d日 %H:%M") + " 对话历史",
-        export_time=now.strftime("%Y年%m月%d日 %H:%M:%S"),
-        messages=''.join(messages_html),
-        message_count=message_count
-    )
-
-    timestamp = now.strftime("%y%m%d_%H%M")
-    filename = f"chat_history_{timestamp}.html"
-
-    # 创建响应，使用URL编码的文件名
-    response = Response(
-        html_content,
-        mimetype='text/html',
-        headers={
-            'Content-Disposition': f'attachment; filename="{filename}"',
-            'Content-Type': 'text/html; charset=utf-8'
-        }
-    )
-
-    return response
-
-
-
-
-# ----------------- 图片压缩（> 3.6 MB 自动压） -----------------
-def maybe_compress_image(b64, target_kb=3600):
+# ----------------- 图片压缩（> 18.5 MB 自动压） -----------------
+def maybe_compress_image(b64, target_kb=189400):
     # ... (代码不变) ...
     raw = base64.b64decode(b64)
     if len(raw) <= target_kb * 1024:
@@ -1065,4 +980,4 @@ def screenshot():
 # ----------------- 主入口 -----------------
 if __name__ == '__main__':
     # threaded=True 对于 SSE 是必要的
-    app.run(debug=True, threaded=True, port=PORT, host='127.0.0.1')
+    app.run(debug=False, threaded=True, port=PORT, host='127.0.0.1')
