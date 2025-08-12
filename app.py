@@ -52,17 +52,18 @@ def stream_gemini_response(history, model, tools=None):
         api_key = None  # 在 try 外部定义，便于 except 块中引用
         try:
             # 调用新的 get_key 方法，并传入上一次成功的 key 作为首选
-            api_key = key_manager.get_key(preferred_key=last_successful_key)
-
-            print(f"正在使用 API Key: {api_key} (尝试 {attempt + 1}/{max_retries})")
+            api_key = key_manager.get_key(preferred_key=last_successful_key,force_paid=False)
+            key_status = key_manager.get_detailed_key_status(api_key)
+            print(f"正在使用 API Key: {api_key} (尝试 {attempt + 1}/{max_retries})"
+                  f"\n当前key层级：{key_status['details'][0]['key_type']}"
+                  f"\n免费层级失败次数：{key_manager.get_status()['free_key_consecutive_failures']}")
             url = f"{MODEL_BASE_URL}{model}:streamGenerateContent?alt=sse&key={api_key}"
             payload = {"contents": history}
             if tools:
                 payload["tools"] = tools
-
             with requests.post(url, headers=HEADERS, json=payload, stream=True, timeout=300) as resp:
                 resp.raise_for_status()
-
+                # print(resp.text)
                 if 'text/event-stream' not in resp.headers.get('Content-Type', ''):
                     raise ValueError("响应非流式格式，请检查API端点或密钥权限。")
 
@@ -106,12 +107,16 @@ def stream_gemini_response(history, model, tools=None):
             # 根据错误代码处理密钥
             if status_code == 429:
                 key_manager.temporarily_suspend_key(api_key)
+                key_manager.record_failure(api_key, status_code)
             elif status_code in [400, 403]:
                 key_manager.mark_key_invalid(api_key)
+                key_manager.record_failure(api_key, status_code)
             elif status_code >= 500:
                 key_manager.temporarily_suspend_key(api_key)
+                key_manager.record_failure(api_key, status_code)
             else:
                 key_manager.mark_key_invalid(api_key)
+                key_manager.record_failure(api_key, status_code)
 
             if attempt >= max_retries - 1:  # 如果是最后一次尝试
                 error_msg = f"所有密钥均尝试失败。最后错误状态码: {status_code}"
@@ -131,6 +136,8 @@ def stream_gemini_response(history, model, tools=None):
     # 【修改】简化状态输出
     status = key_manager.get_status()
     print(f"当前密钥状态: 可用： {status['available_keys']}, 被挂起： {status['suspended_keys']}")
+    for key_type, stats in status['key_statistics'].items():
+        print(f"{key_type}类型 - 总数: {stats['total']}, 可用: {stats['available']}, 挂起: {stats['suspended']}")
 
     # 将模型回复添加到 chat_history
     if current_bot_response_full:
@@ -980,4 +987,4 @@ def screenshot():
 # ----------------- 主入口 -----------------
 if __name__ == '__main__':
     # threaded=True 对于 SSE 是必要的
-    app.run(debug=False, threaded=True, port=PORT, host='127.0.0.1')
+    app.run(debug=True, threaded=True, port=PORT, host='127.0.0.1')
