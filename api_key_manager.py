@@ -288,10 +288,16 @@ class APIKeyManager:
             # 清理过期数据
             self._cleanup_expired_data()
 
-            # 检查是否应该使用付费密钥
-            use_paid = force_paid or self.free_key_consecutive_failures >= self.max_free_key_failures
-
+            # 从数据库重新加载当前的失败计数，确保使用最新值
             with self._get_db_connection() as conn:
+                result = conn.execute(
+                    "SELECT value FROM global_state WHERE key = 'free_key_consecutive_failures'"
+                ).fetchone()
+                self.free_key_consecutive_failures = int(result['value']) if result else 0
+
+                # 检查是否应该使用付费密钥
+                use_paid = force_paid or self.free_key_consecutive_failures >= self.max_free_key_failures
+
                 # 尝试使用首选密钥
                 if preferred_key:
                     if self._is_key_available(preferred_key, conn):
@@ -398,15 +404,15 @@ class APIKeyManager:
                     (key,)
                 ).fetchone()['key_type']
 
-                # 如果是免费密钥成功，重置全局连续失败计数
-                if key_type == 'free':
-                    conn.execute(
-                        "UPDATE global_state SET value = '0' WHERE key = 'free_key_consecutive_failures'"
-                    )
-                    self.free_key_consecutive_failures = 0
+                # 无论是免费还是付费密钥成功，都重置免费密钥的全局连续失败计数
+                # 这是因为成功意味着服务是可用的，应该重新尝试免费密钥
+                conn.execute(
+                    "UPDATE global_state SET value = '0' WHERE key = 'free_key_consecutive_failures'"
+                )
+                self.free_key_consecutive_failures = 0
 
                 conn.commit()
-                logging.debug(f"{key_type}密钥成功完成请求")
+                logging.debug(f"{key_type}密钥成功完成请求，已重置免费密钥连续失败计数")
 
     def record_failure(self, key: str, error_code: int):
         """记录失败的API调用"""
