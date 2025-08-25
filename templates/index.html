@@ -1,1060 +1,979 @@
 <!doctype html>
 <html lang="zh-CN">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>本地对话 (流式)</title>
-  <!-- 本地 KaTeX 支持 -->
-  <link rel="stylesheet" href="/static/katex.min.css">
-  <script src="/static/katex.min.js" defer></script>
-  <script src="/static/auto-render.min.js" defer></script>
-  <!-- 字体路径修复 -->
-  <style>
-    /* 覆盖 KaTeX 字体路径 */
-    @font-face {
-      font-family: 'KaTeX_Main';
-      src: url('/static/fonts/KaTeX_Main-Regular.woff2') format('woff2'),
-           url('/static/fonts/KaTeX_Main-Regular.woff') format('woff'),
-           url('/static/fonts/KaTeX_Main-Regular.ttf') format('truetype');
-      font-weight: normal;
-      font-style: normal;
-    }
-    @font-face {
-      font-family: 'KaTeX_Math';
-      src: url('/static/fonts/KaTeX_Math-Italic.woff2') format('woff2'),
-           url('/static/fonts/KaTeX_Math-Italic.woff') format('woff'),
-           url('/static/fonts/KaTeX_Math-Italic.ttf') format('truetype');
-      font-style: italic;
-      font-weight: normal;
-    }
-    @font-face {
-      font-family: 'KaTeX_Size1';
-      src: url('/static/fonts/KaTeX_Size1-Regular.woff2') format('woff2'),
-           url('/static/fonts/KaTeX_Size1-Regular.woff') format('woff'),
-           url('/static/fonts/KaTeX_Size1-Regular.ttf') format('truetype');
-      font-weight: normal;
-      font-style: normal;
-    }
-    /* 数学备用方案 */
-    .katex {
-      font: normal 1.21em KaTeX_Main, 'Times New Roman', serif;
-    }
-    /* 当KaTeX字体缺失时的备用方案 */
-    .katex .mathdefault {
-      font-family: KaTeX_Math, 'Times New Roman', serif;
-      font-style: italic;
-    }
-  </style>
-  {% raw %}
-  <style>
-    /* 基础样式变量 */
-    :root {
-      --primary-color: #0084ff;
-      --primary-hover: #0056b3;
-      --secondary-color: #f0f0f0;
-      --text-color: #111;
-      --text-light: #fff;
-      --bg-color: #f5f7fa;
-      --border-radius: 8px;
-      --shadow-light: 0 1px 3px rgba(0,0,0,0.08);
-      --shadow-medium: 0 2px 10px rgba(0,0,0,0.1);
-      --spacing: 12px;
-      --bar-height: 220px; /* 增加操作栏高度，确保移动端所有元素可见 */
-    }
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-    }
-    /* 基础样式优化 */
-    body {
-      margin: 0;
-      padding-bottom: var(--bar-height);
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
-      background: var(--bg-color);
-      -webkit-font-smoothing: antialiased;
-      color: var(--text-color);
-      overflow-x: hidden;
-      min-height: 100vh;
-    }
-    #history {
-      padding: 15px;
-      overflow-y: auto;
-      max-height: calc(100vh - var(--bar-height));
-      scroll-behavior: smooth;
-      transition: max-height 0.3s ease; /* 添加高度过渡效果 */
-    }
-    .msg {
-      max-width: 90%; /* 移动端适配 */
-      padding: 10px 14px;
-      border-radius: var(--border-radius);
-      line-height: 1.55;
-      word-break: break-word;
-      box-shadow: var(--shadow-light);
-      margin: 8px 0;
-      overflow-wrap: break-word;
-      overflow: hidden; /* 确保内容不溢出 */
-    }
-    /* 确保列表项正确显示 */
-    .msg ul, .msg ol {
-      padding-left: 24px; /* 增加列表的左内边距 */
-      margin: 10px 0;
-    }
-    .msg li {
-      margin-bottom: 5px;
-    }
-    .user {
-      background: var(--primary-color);
-      color: var(--text-light);
-      margin-left: auto;
-    }
-    .bot {
-      background: #e6e6e6;
-      color: var(--text-color);
-      margin-right: auto;
-    }
-    /* 聊天栏样式优化 */
-    #bar {
-      position: fixed;
-      bottom: 0;
-      left: 0;
-      right: 0;
-      background: #fff;
-      border-top: 1px solid #ddd;
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-      padding: var(--spacing);
-      z-index: 10;
-      box-shadow: var(--shadow-medium);
-      transition: transform 0.3s ease, opacity 0.3s ease, height 0.3s ease; /* 添加高度过渡 */
-      opacity: 1;
-      pointer-events: auto;
-      max-height: var(--bar-height); /* 设置最大高度 */
-      overflow-y: auto; /* 允许内容过多时滚动 */
-    }
-    /* 输入框优化 */
-    #text-input {
-      flex: 1;
-      font-size: 18px;
-      padding: 12px 14px;
-      border: 1px solid #ccc;
-      border-radius: var(--border-radius);
-      min-height: 40px;
-      overflow-y: auto;
-      line-height: 1.5;
-      word-break: break-word;
-      white-space: pre-wrap;
-      resize: none;
-      transition: border-color 0.3s;
-      z-index: 11; /* 提高输入框层级 */
-    }
-    #text-input:focus {
-      outline: none;
-      border-color: var(--primary-color);
-    }
-    #text-input:empty::before {
-      content: attr(placeholder);
-      color: #aaa;
-      pointer-events: none;
-      display: block;
-    }
-    /* 按钮样式增强 */
-    button {
-      touch-action: manipulation;
-      -webkit-tap-highlight-color: rgba(0,0,0,0.1);
-      transition: background-color 0.2s ease, transform 0.1s;
-    }
-    button:active {
-      transform: scale(0.98);
-    }
-    #send, #newTopic {
-      padding: 12px 18px;
-      font-size: 16px;
-      background-color: var(--primary-color);
-      color: white;
-      border: none;
-      border-radius: var(--border-radius);
-      cursor: pointer;
-      min-width: 80px;
-    }
-    #send:hover {
-      background-color: var(--primary-hover);
-    }
-    #send:disabled {
-      background-color: #6c757d;
-      cursor: not-allowed;
-    }
-    #bar button {
-      width: 100%;
-    }
-    #newTopic {
-      background: #fff;
-      color: #000;
-      margin-left: auto;
-      border: 1px solid #ccc;
-    }
-    #newTopic:hover {
-      background-color: var(--secondary-color);
-    }
-    /* 图片预览优化 */
-    #preview-container {
-      position: relative;
-      display: none;
-      align-self: flex-start;
-    }
-    #preview-img {
-      max-height: 120px;
-      max-width: 120px;
-      border: 1px solid #888;
-      border-radius: var(--border-radius);
-      display: block;
-      cursor: pointer;
-      transition: transform 0.2s;
-    }
-    #preview-img:hover {
-      transform: scale(1.05);
-    }
-    #remove-image-btn {
-      position: absolute;
-      top: -16px;
-      right: -16px;
-      background: rgba(220, 53, 69, 0.85);
-      color: white;
-      border: 2px solid white;
-      border-radius: 50%;
-      width: 32px;
-      height: 32px;
-      font-size: 20px;
-      font-weight: bold;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      cursor: pointer;
-      padding: 0;
-      box-shadow: 0 2px 4px rgba(0,0,0,0.3);
-      z-index: 1;
-      transition: background-color 0.2s ease, transform 0.15s ease;
-    }
-    #remove-image-btn:hover {
-      background: rgba(200, 30, 45, 1);
-      transform: scale(1.1);
-    }
-    /* 修复模型下拉菜单问题 */
-    #modelSelect {
-      width: 100%;
-      padding: 10px;
-      border-radius: var(--border-radius);
-      border: 1px solid #ccc;
-      font-size: 16px;
-      background-color: white;
-      cursor: pointer;
-      min-height: 44px; /* 增加高度便于点击 */
-    }
-    #modelSelect option {
-      padding: 10px;
-      font-size: 16px;
-    }
-    /* 优化联网搜索选项 */
-    .search-option {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      margin: 8px 0;
-      padding: 8px;
-      background-color: #f8f9fa;
-      border-radius: var(--border-radius);
-      border: 1px solid #e9ecef;
-    }
-    .search-option input[type="checkbox"] {
-      width: 18px;
-      height: 18px;
-      cursor: pointer;
-    }
-    .search-option label {
-      font-size: 16px;
-      cursor: pointer;
-      user-select: none;
-      display: flex;
-      align-items: center;
-      gap: 5px;
-    }
-    /* 代码和数学表达式样式 */
-    pre {
-      white-space: pre-wrap;
-      background: #f5f5f5;
-      padding: 10px;
-      border-radius: 4px;
-      overflow-x: auto;
-      margin: 8px 0;
-    }
-    code {
-      font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
-      font-size: 0.9em;
-    }
-    .thinking {
-      color: #888;
-      font-style: italic;
-    }
-    /* 数学表达式样式增强 */
-    .katex-display {
-      overflow-x: auto;
-      overflow-y: hidden;
-      padding: 5px 0;
-    }
-    /* 备用方案：如果无法加载KaTeX字体，尝试使用系统字体 */
-    .katex-fallback {
-      font-family: 'Times New Roman', serif;
-      font-style: italic;
-    }
-    /* 移动端收起按钮样式 - 修改后 */
-    #toggleBar {
-      display: none; /* 默认隐藏（桌面端不显示） */
-      position: fixed;
-      bottom: var(--bar-height); /* 初始位置在#bar上方 */
-      left: 50%; /* 居中定位 */
-      transform: translateX(-50%); /* 确保真正居中 */
-      z-index: 15;
-      text-align: center;
-      transition: bottom 0.3s ease;
-    }
-    .arrow-btn {
-      width: 80px; /* 增加宽度 */
-      height: 24px; /* 增加高度，减少长度感 */
-      background: #fff;
-      border: 1px solid #ddd;
-      border-radius: 12px 12px 0 0; /* 更圆润的边角 */
-      box-shadow: 0 -2px 6px rgba(0,0,0,0.1);
-      transition: all 0.3s ease;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      cursor: pointer;
-    }
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>本地对话 (流式)</title>
+<!-- 添加 KaTeX 支持 -->
+<link rel="stylesheet" href="/static/katex.min.css">
+<script src="/static/katex.min.js" defer></script>
+<script src="/static/auto-render.min.js" defer></script>
 
-    /* 当操作栏收起时的样式 - 修改后 */
-    #bar.collapsed {
-      transform: translateY(100%); /* 直接使用百分比完全隐藏 */
-      opacity: 0;
-      pointer-events: none;
-    }
-    /* 查看器样式 */
-    #viewer {
-      display: none;
-      position: fixed;
-      left: 0;
-      top: 0;
-      width: 100%;
-      height: 100%;
-      background: rgba(0,0,0,.85);
-      z-index: 999;
-      align-items: center;
-      justify-content: center;
-      backdrop-filter: blur(2px);
-      transition: opacity 0.3s;
-    }
-    #viewerImg {
-      max-width: 95vw;
-      max-height: 95vh;
-      border-radius: 6px;
-      box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
-      transform: scale(0.95);
-      transition: transform 0.3s;
-    }
-    /* 响应式布局 */
-    @media (min-width: 769px) {
-      #bar {
-        flex-direction: row;
-        flex-wrap: wrap; /* 允许元素换行 */
-        gap: 8px;
-      }
-      #text-input {
-        min-height: 22px;
-        width: 60%; /* 在桌面版上限制宽度 */
-      }
-      .msg {
-        max-width: 70%;
-      }
-      #bar button {
-        width: auto;
-        min-width: 80px;
-      }
-      #modelSelect {
-        width: auto;
-        min-width: 150px;
-      }
-      .search-option {
-        margin: 0;
-        width: auto;
-      }
-    }
-    /* 移动端专属样式 - 修改后 */
-    @media (max-width: 768px) {
-      #toggleBar {
-        display: block;
-      }
-      #bar {
-        transition: transform 0.3s ease;
-        padding-bottom: 20px; /* 增加底部内边距 */
-      }
-      body {
-        padding-bottom: calc(var(--bar-height) + 20px); /* 移动端增加底部内边距 */
-      }
-      /* 确保按钮更容易点击 */
-      select, button {
-        height: 44px; /* 移动端增大点击区域 */
-      }
-      /* 修复移动端可点击输入区域 */
-      #text-input {
-        margin-top: 10px; /* 增加上边距，避免被箭头遮挡 */
-        min-height: 44px; /* 增加最小高度，更容易点击 */
-        margin-bottom: 10px; /* 增加下边距 */
-      }
-      /* 确保移动端箭头不遮挡输入框 */
-      #arrowBtn {
-        opacity: 0.85; /* 略微透明，让用户可以看到下方内容 */
-      }
-      /* 确保所有底部控件可见 */
-      .search-option, #send, #newTopic {
-        margin-bottom: 8px;
-        height: auto;
-        min-height: 44px;
-      }
-    }
-  </style>
-  {% endraw %}
+{% raw %}
+<style>
+/* 基础样式 */
+:root {
+--primary-color: #0084ff;
+--primary-hover: #0056b3;
+--bot-bg: #e6e6e6;
+--user-bg: var(--primary-color);
+--border-radius: 8px;
+--text-color: #333;
+--bg-color: #f5f7fa;
+}
+
+* {
+box-sizing: border-box;
+margin: 0;
+padding: 0;
+}
+
+body {
+font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', sans-serif;
+color: var(--text-color);
+background: var(--bg-color);
+line-height: 1.5;
+min-height: 100vh;
+display: flex;
+flex-direction: column;
+overflow: hidden; /* 防止出现滚动条 */
+}
+
+/* 对话历史 */
+#history {
+flex: 1;
+padding: 15px;
+overflow-y: auto;
+max-height: calc(100vh - 70px); /* 调整高度，减少空白 */
+scroll-behavior: smooth;
+padding-bottom: 20px; /* 增加底部内边距 */
+}
+
+.msg {
+max-width: 70%;
+padding: 10px 14px;
+margin: 8px 0;
+border-radius: var(--border-radius);
+word-break: break-word;
+overflow-wrap: break-word;
+overflow: hidden; /* 确保内容不溢出 */
+}
+
+/* 确保列表项正确显示 */
+.msg ul, .msg ol {
+padding-left: 24px; /* 增加列表的左内边距 */
+margin: 10px 0;
+}
+
+.msg li {
+margin-bottom: 5px;
+}
+
+.user {
+background: var(--user-bg);
+color: #fff;
+margin-left: auto;
+}
+
+.bot {
+background: var(--bot-bg);
+color: #111;
+margin-right: auto;
+}
+
+.msg img {
+max-width: 260px;
+border-radius: 6px;
+margin-top: 6px;
+cursor: pointer;
+transition: transform 0.2s;
+}
+
+.msg img:hover {
+transform: scale(1.02);
+}
+
+/* 输入区 */
+#bar {
+position: sticky;
+bottom: 0;
+background: #fff;
+border-top: 1px solid #ddd;
+display: flex;
+align-items: center;
+gap: 8px;
+padding: 12px 10px;
+z-index: 10;
+box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.05);
+}
+
+#text-input {
+flex: 1;
+font-size: 16px;
+padding: 10px 12px;
+border: 1px solid #ccc;
+border-radius: var(--border-radius);
+min-height: 22px;
+max-height: 150px;
+overflow-y: auto;
+line-height: 1.5;
+word-break: break-word;
+white-space: pre-wrap;
+transition: border-color 0.3s;
+}
+
+#text-input:focus {
+outline: none;
+border-color: var(--primary-color);
+}
+
+#text-input:empty::before {
+content: attr(placeholder);
+color: #aaa;
+pointer-events: none;
+display: block;
+}
+
+button {
+padding: 8px 14px;
+font-size: 15px;
+border-radius: var(--border-radius);
+cursor: pointer;
+border: none;
+transition: background-color 0.2s, transform 0.1s;
+}
+
+button:active {
+transform: scale(0.98);
+}
+
+select {
+padding: 8px;
+border-radius: 4px;
+border: 1px solid #ccc;
+}
+
+#send {
+background-color: var(--primary-color);
+color: white;
+font-weight: 500;
+}
+
+#send:hover {
+background-color: var(--primary-hover);
+}
+
+#send:disabled {
+background-color: #6c757d;
+cursor: not-allowed;
+}
+
+#pickBtn, #shotBtn {
+background: #f0f0f0;
+}
+
+#pickBtn:hover, #shotBtn:hover {
+background: #e5e5e5;
+}
+
+#newTopic {
+margin-left: auto;
+background: #f0f0f0;
+}
+
+#newTopic:hover {
+background: #e5e5e5;
+}
+
+/* 图片预览 */
+#preview-container {
+position: relative;
+display: none;
+margin-left: 6px;
+align-self: center;
+}
+
+#preview-img {
+max-height: 100px;
+max-width: 100px;
+border: 1px solid #888;
+border-radius: 6px;
+display: block;
+cursor: pointer;
+transition: transform 0.2s;
+}
+
+#preview-img:hover {
+transform: scale(1.05);
+}
+
+#remove-image-btn {
+position: absolute;
+top: -12px;
+right: -12px;
+background: rgba(220, 53, 69, 0.85);
+color: white;
+border: 2px solid white;
+border-radius: 50%;
+width: 28px;
+height: 28px;
+font-size: 17px;
+font-weight: bold;
+display: flex;
+align-items: center;
+justify-content: center;
+cursor: pointer;
+padding: 0;
+box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+z-index: 1;
+transition: background-color 0.2s, transform 0.15s;
+}
+
+#remove-image-btn:hover {
+background: rgba(200, 30, 45, 1);
+transform: scale(1.1);
+}
+
+/* 代码和状态 */
+pre {
+white-space: pre-wrap;
+background: #f5f5f5;
+padding: 10px;
+border-radius: 4px;
+overflow-x: auto;
+margin: 8px 0;
+position: relative; /* 添加相对定位 */
+}
+
+code {
+font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+font-size: 0.9em;
+}
+
+.thinking {
+color: #888;
+font-style: italic;
+}
+
+/* 数学表达式样式增强 */
+.katex-display {
+overflow-x: auto;
+overflow-y: hidden;
+padding: 5px 0;
+}
+
+/* 查看器 */
+#viewer {
+display: none;
+position: fixed;
+left: 0;
+top: 0;
+width: 100%;
+height: 100%;
+background: rgba(0, 0, 0, 0.85);
+z-index: 999;
+align-items: center;
+justify-content: center;
+backdrop-filter: blur(2px);
+transition: opacity 0.3s;
+}
+
+#viewerImg {
+max-width: 95vw;
+max-height: 95vh;
+border-radius: 6px;
+box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
+transform: scale(0.95);
+transition: transform 0.3s;
+}
+
+#viewer.visible #viewerImg {
+transform: scale(1);
+}
+
+/* 修改导出按钮样式 */
+#exportBtn {
+position: absolute;
+top: 15px;
+left: 15px;  /* 改为 left */
+background: #28a745;
+color: white;
+padding: 8px 16px;
+border-radius: 6px;
+font-size: 14px;
+font-weight: 500;
+z-index: 100;
+box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+}
+
+#exportBtn:hover {
+background: #218838;
+}
+
+#exportBtn:disabled {
+background: #6c757d;
+cursor: not-allowed;
+}
+
+/* 复制按钮样式 */
+.copy-btn {
+position: absolute;
+background: #4CAF50;
+color: white;
+border: none;
+padding: 4px 8px;
+font-size: 12px;
+border-radius: 4px;
+cursor: pointer;
+opacity: 0.8;
+transition: opacity 0.2s, background-color 0.2s;
+z-index: 10;
+}
+
+.copy-btn:hover {
+opacity: 1;
+background: #45a049;
+}
+
+.copy-btn.copied {
+background: #2196F3;
+}
+
+/* 响应式设计 */
+@media (max-width: 768px) {
+#bar {
+flex-wrap: wrap;
+padding: 8px;
+}
+
+#modelSelect, #text-input {
+width: 100%;
+}
+
+.msg {
+max-width: 85%;
+}
+
+#text-input {
+order: -1;
+margin-bottom: 8px;
+}
+}
+
+/* ---- 新增规则：隐藏指定按钮 ---- */
+#exportBtn, #shotBtn {
+  display: none;
+}
+</style>
+{% endraw %}
+<script src="/static/marked.min.js" defer></script>
 </head>
 <body>
-  <div id="history"></div>
-  <div id="toggleBar">
-    <button id="arrowBtn" class="arrow-btn">&#9660;</button>
-  </div>
-  <div id="bar">
-    <!-- 修复模型选择下拉菜单 -->
-    <select id="modelSelect">
-      <option value="" disabled selected>选择模型</option>
-      <!-- 这里会由JavaScript动态填充 -->
-    </select>
-    <input type="file" accept="image/*" id="pick" style="display:none">
-    <button id="pickBtn">选择图片</button>
-    <div id="text-input" contenteditable="true" placeholder="输入内容…（Shift+Enter换行/Enter发送）"></div>
-    <!-- 优化联网搜索选项样式 -->
-    <div class="search-option">
-      <label for="enableSearch">
-        <input type="checkbox" id="enableSearch" />
-        联网搜索
-      </label>
-    </div>
-    <div id="preview-container">
-      <img id="preview-img" alt="预览图片">
-      <button id="remove-image-btn" title="移除图片">&times;</button>
-    </div>
-    <button id="send">发送</button>
-    <button id="newTopic">新话题</button>
-  </div>
-  <div id="viewer">
-    <img id="viewerImg" alt="查看图片">
-  </div>
-  <!-- 脚本加载 -->
-  <script>
-    // 延迟加载脚本
-    document.addEventListener('DOMContentLoaded', () => {
-      // 加载 marked
-      const markedScript = document.createElement('script');
-      markedScript.src = '/static/marked.min.js';
-      markedScript.onload = () => {
-        // 定义 md2html 函数
-        window.md2html = function(txt) {
-          // 修复开头\\\\n问题
-          txt = txt.replace(/^\\\\n+/, '');
-          if (window.marked) {
-            marked.setOptions({
-              gfm: true,
-              breaks: true,
-              html: true,
-              headerIds: false
-            });
-            return marked.parse(txt);
-          }
-          // 回退逻辑（纯文本渲染）
-          return txt.replace(/&/g,"&amp;")
-                   .replace(/</g,"&lt;")
-                   .replace(/>/g,"&gt;")
-                   .replace(/\\\\n/g,"<br>");
-        };
-        // 标记加载完成状态
-        window.markedReady = true;
-        // 处理待解析内容
-        if (window.pendingMd) {
-          document.querySelectorAll('.msg').forEach(el => {
-            if (el.dataset.pending) {
-              el.innerHTML = md2html(el.dataset.content);
-              delete el.dataset.pending;
-              // 渲染数学表达式
-              renderMath();
-            }
-          });
-        }
-      };
-      document.body.appendChild(markedScript);
-    });
+<div id="history"></div>
+<button id="exportBtn" title="导出对话历史">导出</button>
 
-    // 渲染数学表达式
-    let mathRenderFailed = false;
-    function renderMath() {
-      if (mathRenderFailed) return; // 如果已经失败过，不再尝试渲染
-      if (window.renderMathInElement) {
-        try {
-          renderMathInElement(document.body, {
-            delimiters: [
-              {left: "$$", right: "$$", display: true},
-              {left: "$", right: "$", display: false}
-            ],
-            throwOnError: false,
-            errorColor: '#cc0000',
-            trust: true
-          });
-        } catch (e) {
-          console.error("KaTeX渲染错误:", e);
-          mathRenderFailed = true;
-          // 使用备用方案：将所有数学表达式改为 <em> 标签
-          useFallbackMathRendering();
-        }
-      } else {
-        console.warn("KaTeX auto-render未加载，等待脚本加载完成...");
-        // 检查是否可以使用核心KaTeX但没有auto-render
-        checkKatexLoaded();
-      }
-    }
 
-    // 检查KaTeX是否已加载
-    function checkKatexLoaded() {
-      if (!window.renderMathInElement && window.katex) {
-        console.log("KaTeX已加载，但auto-render未加载");
-        // 如果只有 KaTeX 但没有 renderMathInElement，尝试手动实现简单的渲染
-        window.renderMathInElement = function(element, options) {
-          const mathElements = element.querySelectorAll('.bot');
-          mathElements.forEach(el => {
-            let html = el.innerHTML;
-            // 使用正则表达式查找 $$ 包围的内容
-            const displayMathRegex = /\\\\$\\\\$([\\\\s\\\\S]+?)\\\\$\\\\$/g;
-            const inlineMathRegex = /\\\\$([^\\\\$]+?)\\\\$/g;
-            // 替换块级公式
-            html = html.replace(displayMathRegex, function(match, p1) {
-              try {
-                return '<div class="katex-display">' + katex.renderToString(p1, {displayMode: true}) + '</div>';
-              } catch (e) {
-                return '<div class="katex-display katex-error" title="' + e.message + '">' + p1 + '</div>';
-              }
-            });
-            // 替换行内公式
-            html = html.replace(inlineMathRegex, function(match, p1) {
-              try {
-                return katex.renderToString(p1, {displayMode: false});
-              } catch (e) {
-                return '<span class="katex-error" title="' + e.message + '">' + p1 + '</span>';
-              }
-            });
-            el.innerHTML = html;
-          });
-        };
-      }
-    }
+<div id="bar">
+<select id="modelSelect">
+{% for model in models %}
+<option value="{{ model }}">{{ model }}</option>
+{% endfor %}
+</select>
 
-    // 数学表达式备用渲染方法
-    function useFallbackMathRendering() {
-      console.log("使用备用方案渲染数学表达式");
-      // 查找所有包含 $$ 的元素
-      const botMessages = document.querySelectorAll('.bot');
-      botMessages.forEach(msg => {
-        let html = msg.innerHTML;
-        // 替换行内公式
-        html = html.replace(/\\\\$([^\\\\$]+)\\\\$/g, '<em class="katex-fallback">$1</em>');
-        // 替换块级公式
-        html = html.replace(/\\\\$\\\\$([^\\\\$]+)\\\\$\\\\$/g, '<div class="katex-fallback" style="display:block;margin:10px 0;text-align:center;">$1</div>');
-        msg.innerHTML = html;
-      });
-    }
+<input type="file" accept="image/*" id="pick" style="display:none">
+<button id="pickBtn" title="从设备选择图片">选择图片</button>
+<button id="shotBtn" title="捕获屏幕截图">屏幕截图</button>
 
-    // 确保KaTeX正确加载
-    document.addEventListener('DOMContentLoaded', function() {
-      // 检查KaTeX脚本是否加载完成
-      const checkInterval = setInterval(function() {
-        if (window.renderMathInElement) {
-          clearInterval(checkInterval);
-          console.log("KaTeX完全加载，可以渲染数学表达式");
-          // 尝试渲染已加载的内容中的数学表达式
-          renderMath();
-        } else {
-          // 检查是否有其他方式可用
-          checkKatexLoaded();
-        }
-      }, 500);
-      // 超时处理
-      setTimeout(function() {
-        clearInterval(checkInterval);
-        if (!window.renderMathInElement) {
-          console.error("KaTeX加载超时，使用备用渲染方法");
-          mathRenderFailed = true;
-          useFallbackMathRendering();
-        }
-      }, 3000); // 3秒后超时
-    });
+<div id="text-input" contenteditable="true" placeholder="输入内容…（Shift+Enter 换行/Enter 发送）"></div>
 
-    // 收起/展开功能 - 修改后
-    let isBarCollapsed = false;
-    const toggleBar = document.getElementById('toggleBar');
+<label style="display: flex; align-items: center; gap: 5px;">
+<input type="checkbox" id="enableSearch">
+联网搜索
+</label>
 
-    document.getElementById('arrowBtn').addEventListener('click', () => {
-      isBarCollapsed = !isBarCollapsed;
-      if (isBarCollapsed) {
-        document.getElementById('bar').classList.add('collapsed');
-        document.getElementById('arrowBtn').innerHTML = '&#9650;';
-        toggleBar.style.bottom = '0'; // 收起时让箭头到底部
-        // 调整历史记录区域高度 - 扩展到全屏
-        document.getElementById('history').style.maxHeight = `${window.innerHeight - 30}px`; // 保留箭头的空间
-      } else {
-        document.getElementById('bar').classList.remove('collapsed');
-        document.getElementById('arrowBtn').innerHTML = '&#9660;';
-        toggleBar.style.bottom = 'var(--bar-height)'; // 展开时回到bar上方
-        // 恢复历史记录区域原始高度
-        adjustHeight(); // 调用调整高度函数
-      }
-      // 滚动到底部以确保可见最新消息
-      setTimeout(() => {
-        document.getElementById('history').scrollTop = document.getElementById('history').scrollHeight;
-      }, 300);
-    });
-  </script>
-  <script>
-    const $ = id => document.getElementById(id);
-    // 主要元素引用 - 修复重复声明问题
-    const textInput = $("text-input");
-    const previewContainer = $("preview-container");
-    const previewImage = $("preview-img");
-    const removeImageBtn = $("remove-image-btn");
-    const sendBtn = $("send");
-    const modelSelect = $("modelSelect");
-    const enableSearch = $("enableSearch");
-    const viewer = $("viewer");
-    const viewerImg = $("viewerImg");
-    const historyBox = $("history");
-    const bar = $("bar");
+<div id="preview-container">
+<img id="preview-img" alt="预览图片">
+<button id="remove-image-btn" title="移除图片">×</button>
+</div>
 
-    // 状态变量
-    let imageBase64 = null;
-    let imageLocalURL = null;
-    let currentEventSource = null;
+<button id="send" title="发送消息">发送</button>
+<button id="newTopic" title="开始新的对话">新话题</button>
+</div>
 
-    // 输入框聚焦时自动滚动和展开 - 修改后
-    textInput.addEventListener('focus', () => {
-      // 延迟确保键盘弹出后再滚动
-      setTimeout(() => {
-        window.scrollTo(0, document.body.scrollHeight);
-        textInput.scrollIntoView({ behavior: 'smooth' });
-      }, 300);
+<div id="viewer">
+<img id="viewerImg" alt="查看图片">
+</div>
 
-      // 确保bar展开
-      if (isBarCollapsed) {
-        document.getElementById('arrowBtn').click();
-      }
-    });
+<script>
+// 工具函数
+const $ = id => document.getElementById(id);
 
-    // 加载历史记录
-    async function loadHistory() {
-      try {
-        historyBox.innerHTML = '<div class="msg bot">加载历史记录中...</div>';
-        const r = await fetch('/history');
-        if (!r.ok) throw new Error(`HTTP error! status: ${r.status}`);
-        const arr = await r.json();
-        historyBox.innerHTML = '';
-        arr.forEach(obj => {
-          appendMsg(obj.md, obj.who, false);
-        });
-        historyBox.scrollTop = historyBox.scrollHeight;
-        // 尝试渲染历史消息中的数学表达式
-        setTimeout(renderMath, 100);
-      } catch (error) {
-        console.error("加载历史记录失败:", error);
-        historyBox.innerHTML = '<div class="msg bot">加载历史记录失败，请刷新页面或检查后端服务。</div>';
-      }
-    }
+// DOM 元素引用
+const historyBox = $("history");
+const textInput = $("text-input");
+const previewContainer = $("preview-container");
+const previewImage = $("preview-img");
+const removeImageBtn = $("remove-image-btn");
+const sendBtn = $("send");
+const newTopicBtn = $("newTopic");
+const shotBtn = $("shotBtn");
+const pickBtn = $("pickBtn");
+const modelSelect = $("modelSelect");
+const enableSearch = $("enableSearch");
+const viewer = $("viewer");
+const viewerImg = $("viewerImg");
+const exportBtn = $("exportBtn");
 
-    // 初始加载
-    document.addEventListener('DOMContentLoaded', function() {
-      loadHistory();
-      // 调整高度
-      adjustHeight();
-      window.addEventListener('resize', adjustHeight);
-      window.addEventListener('orientationchange', adjustHeight);
+// 状态变量
+let imageBase64 = null;
+let imageLocalURL = null;
+let currentEventSource = null;
 
-      // 加载模型列表 - 修复模型选择问题
-      loadModelList();
-    });
+// 渲染数学表达式
+function renderMath() {
+if (window.renderMathInElement) {
+renderMathInElement(document.body, {
+delimiters: [
+{left: "$$", right: "$$", display: true},
+{left: "$", right: "$", display: false}
+],
+throwOnError: false
+});
+}
+}
 
-    // 加载模型列表 - 新增函数，直接使用后端API
-    async function loadModelList() {
-      try {
-        const response = await fetch('/models');
-        if (!response.ok) {
-          throw new Error(`HTTP error: ${response.status}`);
-        }
+// 添加复制按钮到代码块
+function addCopyButtons() {
+const codeBlocks = document.querySelectorAll('pre');
+codeBlocks.forEach((pre, index) => {
+// 检查是否已经有复制按钮
+if (pre.querySelector('.copy-btn')) {
+return;
+}
 
-        const models = await response.json();
-        console.log("获取的模型列表:", models);
 
-        if (Array.isArray(models) && models.length > 0) {
-          // 保留第一个默认选项（如果存在），删除所有其他选项
-          while (modelSelect.options.length > 1) {
-            modelSelect.remove(1);
-          }
+// 创建复制按钮
+const copyBtn = document.createElement('button');
+copyBtn.className = 'copy-btn';
+copyBtn.textContent = '复制';
+copyBtn.dataset.codeIndex = index;
 
-          // 添加从服务器获取的模型选项
-          models.forEach(model => {
-            const option = document.createElement('option');
-            option.value = model;
-            option.textContent = model;
-            modelSelect.appendChild(option);
-          });
 
-          // 默认选中第一个模型（如果没有默认选择）
-          if (modelSelect.selectedIndex < 0 && models.length > 0) {
-            modelSelect.value = models[0];
-          }
+// 设置按钮位置的函数
+const positionButton = () => {
+const preRect = pre.getBoundingClientRect();
+const scrollHeight = pre.scrollHeight;
+const clientHeight = pre.clientHeight;
 
-          console.log("成功加载模型列表");
-        } else {
-          console.warn("获取的模型列表为空或格式不符合预期");
-          // 如果模型列表为空，添加一个默认选项
-          addDefaultModelOption("默认模型");
-        }
-      } catch (error) {
-        console.error("加载模型列表失败:", error);
-        // 出错时添加一个默认选项
-        addDefaultModelOption("加载失败 - 使用默认");
-      }
-    }
 
-    // 帮助函数：添加默认模型选项
-    function addDefaultModelOption(text) {
-      // 检查是否已有"默认模型"选项
-      let hasDefault = false;
-      for (let i = 0; i < modelSelect.options.length; i++) {
-        if (modelSelect.options[i].value === "default") {
-          hasDefault = true;
-          break;
-        }
-      }
+// 判断是否有滚动条
+if (scrollHeight > clientHeight) {
+// 有滚动条，放在右下角
+copyBtn.style.right = '10px';
+copyBtn.style.bottom = '10px';
+copyBtn.style.top = 'auto';
+} else {
+// 无滚动条，放在右上角
+copyBtn.style.right = '10px';
+copyBtn.style.top = '10px';
+copyBtn.style.bottom = 'auto';
+}
+};
 
-      if (!hasDefault) {
-        const option = document.createElement('option');
-        option.value = "default";
-        option.textContent = text;
-        modelSelect.appendChild(option);
-        modelSelect.value = "default";
-      }
-    }
 
-    // 调整高度 - 修改后
-    function adjustHeight() {
-      const windowHeight = window.innerHeight;
-      const barHeight = isBarCollapsed ? 30 : bar.offsetHeight; // 根据收起状态决定预留高度
-      historyBox.style.maxHeight = `${windowHeight - barHeight}px`;
+// 初始定位
+positionButton();
 
-      // 调整箭头按钮位置
-      if (!isBarCollapsed) {
-        document.getElementById('toggleBar').style.bottom = `${barHeight}px`;
-      }
-    }
 
-    // 添加消息
-    function appendMsg(md, who, shouldScroll = true, isThinking = false) {
-      const div = document.createElement('div');
-      div.className = 'msg ' + who;
-      if (isThinking) {
-        div.classList.add('thinking');
-        div.innerHTML = md;
-      } else {
-        div.dataset.pending = true;
-        div.dataset.content = md;
-        if (window.markedReady) {
-          div.innerHTML = window.md2html(md);
-          delete div.dataset.pending;
-          // 如果是机器人消息，尝试渲染数学表达式
-          if (who === 'bot') {
-            setTimeout(() => renderMath(), 50);
-          }
-        } else {
-          window.pendingMd = true;
-        }
-      }
-      historyBox.appendChild(div);
-      if (shouldScroll) {
-        setTimeout(() => {
-          historyBox.scrollTop = historyBox.scrollHeight;
-        }, 10);
-      }
-      return div;
-    }
+// 监听窗口大小变化
+window.addEventListener('resize', positionButton);
 
-    // 重置输入区
-    function resetInputArea() {
-      textInput.innerHTML = '';
-      $("pick").value = '';
-      imageBase64 = null;
-      imageLocalURL = null;
-      previewImage.src = '';
-      previewContainer.style.display = 'none';
-      textInput.focus();
-    }
 
-    // 图片选择
-    $("pickBtn").onclick = () => $("pick").click();
-    $("pick").onchange = e => {
-      const file = e.target.files[0];
-      if (!file) return;
-      // 检查文件大小
-      const MAX_SIZE = 1024 * 1024 * 5; // 5MB
-      if (file.size > MAX_SIZE) {
-        alert('图片过大，请选择5MB以下的图片');
-        return;
-      }
-      const reader = new FileReader();
-      reader.onload = ev => {
-        imageLocalURL = ev.target.result;
-        imageBase64 = imageLocalURL.split(',')[1];
-        previewImage.src = imageLocalURL;
-        previewContainer.style.display = 'block';
-      };
-      reader.readAsDataURL(file);
-    };
+// 复制功能
+copyBtn.onclick = async () => {
+const codeElement = pre.querySelector('code');
+const textToCopy = codeElement ? codeElement.textContent : pre.textContent;
 
-    // 移除图片
-    removeImageBtn.onclick = () => {
-      imageBase64 = null;
-      imageLocalURL = null;
-      $("pick").value = '';
-      previewImage.src = '';
-      previewContainer.style.display = 'none';
-      textInput.focus();
-    };
 
-    // 发送消息
-    sendBtn.onclick = async () => {
-      const txt = textInput.innerText.trim();
-      if (!txt && !imageBase64) {
-        alert("请输入内容或添加图片");
-        return;
-      }
-      if (currentEventSource && currentEventSource.readyState !== EventSource.CLOSED) {
-        alert("请等待当前回复完成后再发送新消息。");
-        return;
-      }
-      const model = modelSelect.value;
-      const searchEnabled = enableSearch.checked;
-      const userTextToSend = txt;
-      const userImageToSend = imageBase64;
-      const userImageLocalURL = imageLocalURL;
-      // 添加用户消息到对话界面
-      let mdUser = '**你：**\n' + userTextToSend;
-      appendMsg(mdUser, 'user');
-      // 如果有图片，也添加到界面
-      if (userImageLocalURL) {
-        const imgDiv = document.createElement('div');
-        imgDiv.className = 'msg user';
-        imgDiv.style.padding = '0';
-        imgDiv.innerHTML = `<img src="${userImageLocalURL}" alt="用户上传图片" style="max-width:260px; border-radius:6px; margin-top:6px; display: block; margin-left: auto;">`;
-        historyBox.appendChild(imgDiv);
-        historyBox.scrollTop = historyBox.scrollHeight;
-      }
-      resetInputArea();
-      sendBtn.disabled = true;
-      sendBtn.textContent = '等待中...';
-      try {
-        // 发送消息到服务器
-        const chatData = {
-          text: userTextToSend,
-          image: userImageToSend
-        };
-        // 只有在用户选择了模型和启用搜索时才添加这些字段
-        if (model && model !== "") {
-          chatData.model = model;
-        }
-        if (searchEnabled) {
-          chatData.enable_search = searchEnabled;
-        }
-        const r = await fetch('/chat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(chatData)
-        });
-        if (!r.ok) {
-          const errData = await r.json().catch(() => ({ error: '无法解析错误信息' }));
-          throw new Error(`服务器错误: ${r.status} - ${errData.error || '未知错误'}`);
-        }
-        const js = await r.json();
-        if (!js.ok) {
-          throw new Error("服务器未能成功处理用户消息");
-        }
-        // 创建等待提示
-        const botMsgDiv = appendMsg('**人工智能：**\n<span class="thinking">正在思考...</span>', 'bot', true, true);
-        let accumulatedMd = '**人工智能：**\\\\n';
-        let isFirstChunk = true;
-        // 设置流式连接 - 修复 URL 构建问题
-        let streamUrl = '/stream';
-        const params = new URLSearchParams();
-        if (model && model !== "") {
-          params.append('model', model);
-        }
-        if (searchEnabled) {
-          params.append('enable_search', searchEnabled);
-        }
-        if (params.toString()) {
-          streamUrl += '?' + params.toString();
-        }
-        console.log("连接流URL:", streamUrl);
-        currentEventSource = new EventSource(streamUrl);
-        // 流式处理
-        currentEventSource.onmessage = function(event) {
-          try {
-            const chunkData = JSON.parse(event.data);
-            if (isFirstChunk) {
-              botMsgDiv.classList.remove('thinking');
-              accumulatedMd = '**人工智能：**\n';
-              isFirstChunk = false;
-            }
-            accumulatedMd += chunkData.text;
-            if (window.md2html) {
-              botMsgDiv.innerHTML = window.md2html(accumulatedMd);
-              // 尝试逐步渲染数学表达式
-              renderMath();
-            } else {
-              botMsgDiv.textContent = accumulatedMd;
-            }
-            historyBox.scrollTop = historyBox.scrollHeight;
-          } catch (e) {
-            console.error("解析 SSE 数据块失败:", e, "数据:", event.data);
-            botMsgDiv.innerHTML += "<br>[数据解析错误]";
-          }
-        };
-        // 流结束处理
-        currentEventSource.addEventListener('end', function(event) {
-          console.log("Stream ended:", event.data);
-          closeStream();
-          // 确保在流结束后再次渲染数学表达式
-          setTimeout(renderMath, 200);
-        });
-        // 流错误处理
-        currentEventSource.onerror = function(err) {
-          console.error("EventSource failed:", err);
-          if (isFirstChunk) {
-            if (window.md2html) {
-              botMsgDiv.innerHTML = window.md2html(accumulatedMd + '\\\\n\\\\n[连接错误或流中断]');
-            } else {
-              botMsgDiv.textContent = accumulatedMd + '\\\\n\\\\n[连接错误或流中断]';
-            }
-            botMsgDiv.classList.remove('thinking');
-          } else {
-            if (window.md2html) {
-              botMsgDiv.innerHTML = window.md2html(accumulatedMd + '\\\\n\\\\n[连接错误或流中断]');
-            } else {
-              botMsgDiv.textContent = accumulatedMd + '\\\\n\\\\n[连接错误或流中断]';
-            }
-          }
-          // 错误情况下也尝试渲染数学表达式
-          renderMath();
-          closeStream();
-        };
-      } catch(err) {
-        console.error("发送消息或连接流失败:", err);
-        appendMsg(`**错误：**\\\\n无法发送消息或连接到流服务。\\\\n${err.message}`, 'bot');
-        sendBtn.disabled = false;
-        sendBtn.textContent = '发送';
-      }
-    };
+try {
+await navigator.clipboard.writeText(textToCopy);
+copyBtn.textContent = '已复制';
+copyBtn.classList.add('copied');
+setTimeout(() => {
+copyBtn.textContent = '复制';
+copyBtn.classList.remove('copied');
+}, 2000);
+} catch (err) {
+// 降级方案
+const textArea = document.createElement('textarea');
+textArea.value = textToCopy;
+textArea.style.position = 'absolute';
+textArea.style.left = '-9999px';
+document.body.appendChild(textArea);
+textArea.select();
+try {
+document.execCommand('copy');
+copyBtn.textContent = '已复制';
+copyBtn.classList.add('copied');
+setTimeout(() => {
+copyBtn.textContent = '复制';
+copyBtn.classList.remove('copied');
+}, 2000);
+} catch (err) {
+console.error('复制失败:', err);
+alert('复制失败，请手动选择复制');
+}
+document.body.removeChild(textArea);
+}
+};
 
-    // 关闭流
-    function closeStream() {
-      if (currentEventSource) {
-        currentEventSource.close();
-        currentEventSource = null;
-        console.log("EventSource closed.");
-      }
-      sendBtn.disabled = false;
-      sendBtn.textContent = '发送';
-    }
+pre.appendChild(copyBtn);
+});
+}
 
-    // 新话题
-    $("newTopic").onclick = async () => {
-      if (currentEventSource && currentEventSource.readyState !== EventSource.CLOSED) {
-        if (!confirm("当前回复仍在进行中，确定要强制开启新话题吗？")) return;
-        closeStream();
-      } else {
-        if (!confirm("确定要开启新话题？这会清空全部对话。")) return;
-      }
-      try {
-        await fetch('/reset', { method: 'POST' });
-        historyBox.innerHTML = '';
-        resetInputArea();
-        mathRenderFailed = false; // 重置数学渲染状态
-        console.log("新话题已开启");
-      } catch (err) {
-        console.error("重置会话失败:", err);
-        alert("开启新话题失败，请检查后端服务。");
-      }
-    };
+// Markdown 转 HTML，处理换行问题
+function md2html(txt) {
+// 修复开头\\\\n问题
+txt = txt.replace(/^\\\\n+/, '');
 
-    // 图片查看器增强
-    previewImage.onclick = () => {
-      if (imageLocalURL) {
-        openViewer(imageLocalURL);
-      }
-    };
+if (window.marked) {
+marked.setOptions({
+gfm: true,
+breaks: true,
+highlight: function(code, lang) {
+return code;
+}
+});
 
-    historyBox.addEventListener('click', e => {
-      if (e.target.tagName === 'IMG') {
-        openViewer(e.target.src);
-      }
-    });
+if (typeof marked.parse === 'function') {
+const html = marked.parse(txt);
+return html;
+}
+if (typeof marked === 'function') {
+const html = marked(txt);
+return html;
+}
+}
 
-    viewer.onclick = () => {
-      viewer.style.opacity = '0';
-      setTimeout(() => {
-        viewer.style.display = 'none';
-        viewer.style.opacity = '1';
-      }, 300);
-    };
+return txt.replace(/&/g, "&amp;")
+.replace(/</g, "&lt;")
+.replace(/>/g, "&gt;")
+.replace(/\\\\n/g, "<br>");
+}
 
-    function openViewer(src) {
-      if (!src || src.startsWith('data:image/png;base64,' + '...')) return;
-      viewerImg.src = src;
-      viewer.style.display = 'flex';
-      // 双击关闭
-      viewerImg.ondblclick = () => {
-        viewer.style.opacity = '0';
-        setTimeout(() => {
-          viewer.style.display = 'none';
-          viewer.style.opacity = '1';
-        }, 300);
-      };
-    }
+// 加载历史记录
+async function loadHistory() {
+try {
+historyBox.innerHTML = '<div class="msg bot">加载历史记录中...</div>';
+const r = await fetch('/history');
 
-    // 输入处理
-    textInput.addEventListener("keydown", function(event) {
-      if (event.key === "Enter") {
-        if (!event.shiftKey) {
-          event.preventDefault();
-          sendBtn.click();
-        }
-      }
-    });
+if (!r.ok) throw new Error(`HTTP error! status: ${r.status}`);
 
-    // 滚动到底部函数 - 新增
-    function scrollToBottom(delay = 100) {
-      setTimeout(() => {
-        historyBox.scrollTop = historyBox.scrollHeight;
-      }, delay);
-    }
-  </script>
+const arr = await r.json();
+historyBox.innerHTML = '';
+
+arr.forEach(obj => {
+appendMsg(obj.md, obj.who, false);
+});
+
+historyBox.scrollTop = historyBox.scrollHeight;
+renderMath(); // 渲染加载后的数学表达式
+// 为已有的代码块添加复制按钮
+setTimeout(addCopyButtons, 100);
+} catch (error) {
+console.error("加载历史记录失败:", error);
+historyBox.innerHTML = '<div class="msg bot">加载历史记录失败，请刷新页面或检查后端服务。</div>';
+}
+}
+
+// 初始加载
+document.addEventListener('DOMContentLoaded', function() {
+loadHistory();
+
+// 调整高度以填充整个视图
+adjustHeight();
+window.addEventListener('resize', adjustHeight);
+});
+
+// 调整高度，解决底部空白问题
+function adjustHeight() {
+const windowHeight = window.innerHeight;
+const barHeight = $("bar").offsetHeight;
+historyBox.style.height = `${windowHeight - barHeight}px`;
+historyBox.style.maxHeight = `${windowHeight - barHeight}px`;
+}
+
+// 添加消息
+function appendMsg(md, who, shouldScroll = true, isThinking = false) {
+const div = document.createElement('div');
+div.className = 'msg ' + who;
+
+if (isThinking) {
+div.classList.add('thinking');
+div.innerHTML = md;
+} else {
+// 移除开头的换行符
+md = md.replace(/^\\\\n+/, '');
+div.innerHTML = md2html(md);
+
+// 延迟渲染数学表达式和添加复制按钮
+setTimeout(() => {
+renderMath();
+addCopyButtons();
+}, 0);
+}
+
+historyBox.appendChild(div);
+
+if (shouldScroll) {
+setTimeout(() => {
+historyBox.scrollTop = historyBox.scrollHeight;
+}, 10);
+}
+
+return div;
+}
+
+// 重置输入区
+function resetInputArea() {
+textInput.innerHTML = '';
+$("pick").value = '';
+imageBase64 = null;
+imageLocalURL = null;
+previewImage.src = '';
+previewContainer.style.display = 'none';
+textInput.focus();
+}
+
+// 图片选择
+pickBtn.onclick = () => $("pick").click();
+
+$("pick").onchange = e => {
+const file = e.target.files[0];
+if (!file) return;
+
+// 检查文件大小
+if (file.size > 5 * 1024 * 1024) {
+alert("图片大小不能超过5MB");
+return;
+}
+
+const reader = new FileReader();
+reader.onload = ev => {
+imageLocalURL = ev.target.result;
+imageBase64 = imageLocalURL.split(',')[1];
+previewImage.src = imageLocalURL;
+previewContainer.style.display = 'block';
+};
+reader.readAsDataURL(file);
+};
+
+// 截图功能
+shotBtn.onclick = async () => {
+shotBtn.disabled = true;
+shotBtn.textContent = '截图中...';
+
+try {
+const r = await fetch('/screenshot', {
+method: 'POST',
+headers: {
+'Content-Type': 'application/json'
+}
+});
+
+const data = await r.json();
+
+if (data.img) {
+imageBase64 = data.img;
+imageLocalURL = 'data:image/png;base64,' + data.img;
+previewImage.src = imageLocalURL;
+previewContainer.style.display = 'block';
+} else if (r.status !== 500) {
+alert("截图失败或用户取消");
+}
+} catch (err) {
+console.error("截图请求失败:", err);
+alert("截图功能出错");
+} finally {
+shotBtn.disabled = false;
+shotBtn.textContent = '屏幕截图';
+}
+};
+
+// 移除图片
+removeImageBtn.onclick = () => {
+imageBase64 = null;
+imageLocalURL = null;
+$("pick").value = '';
+previewImage.src = '';
+previewContainer.style.display = 'none';
+textInput.focus();
+};
+
+// 发送消息
+sendBtn.onclick = async () => {
+const txt = textInput.innerText.trim();
+
+if (!txt && !imageBase64) {
+alert("请输入内容或添加图片/截图");
+return;
+}
+
+if (currentEventSource && currentEventSource.readyState !== EventSource.CLOSED) {
+alert("请等待当前回复完成后再发送新消息。");
+return;
+}
+
+const model = modelSelect.value;
+const searchEnabled = enableSearch.checked;
+const userTextToSend = txt;
+const userImageToSend = imageBase64;
+const userImageLocalURL = imageLocalURL;
+
+// 添加用户消息到对话界面
+let mdUser = '你：\n' + userTextToSend;
+appendMsg(mdUser, 'user');
+
+// 如果有图片，也添加到界面
+if (userImageLocalURL) {
+const imgDiv = document.createElement('div');
+imgDiv.className = 'msg user';
+imgDiv.style.padding = '0';
+imgDiv.innerHTML = `<img src="${userImageLocalURL}" alt="用户上传图片" style="max-width:260px; border-radius:6px; margin-top:6px; display: block; margin-left: auto;">`;
+historyBox.appendChild(imgDiv);
+historyBox.scrollTop = historyBox.scrollHeight;
+}
+
+resetInputArea();
+sendBtn.disabled = true;
+sendBtn.textContent = '等待中...';
+
+try {
+// 发送消息到服务器
+const r = await fetch('/chat', {
+method: 'POST',
+headers: { 'Content-Type': 'application/json' },
+body: JSON.stringify({
+text: userTextToSend,
+image: userImageToSend,
+model: model,
+enable_search: searchEnabled
+})
+});
+
+if (!r.ok) {
+const errData = await r.json().catch(() => ({ error: '无法解析错误信息' }));
+throw new Error(`服务器错误: ${r.status} - ${errData.error || '未知错误'}`);
+}
+
+const js = await r.json();
+
+if (!js.ok) {
+throw new Error("服务器未能成功处理用户消息");
+}
+
+// 创建等待提示
+const botMsgDiv = appendMsg('人工智能：\n<span class="thinking">正在思考...</span>', 'bot', true, true);
+
+let accumulatedMd = '人工智能：\n';
+let isFirstChunk = true;
+
+// 设置流式连接
+const streamUrl = `/stream?model=${encodeURIComponent(model)}&enable_search=${searchEnabled}`;
+currentEventSource = new EventSource(streamUrl);
+
+// 流式处理
+currentEventSource.onmessage = function(event) {
+try {
+const chunkData = JSON.parse(event.data);
+
+if (isFirstChunk) {
+botMsgDiv.classList.remove('thinking');
+accumulatedMd = '人工智能：\n';
+isFirstChunk = false;
+}
+
+accumulatedMd += chunkData.text;
+botMsgDiv.innerHTML = md2html(accumulatedMd);
+
+// 在添加内容后渲染数学表达式和添加复制按钮
+renderMath();
+addCopyButtons();
+
+historyBox.scrollTop = historyBox.scrollHeight;
+} catch (e) {
+console.error("解析 SSE 数据块失败:", e, "数据:", event.data);
+botMsgDiv.innerHTML += "<br>[数据解析错误]";
+}
+};
+
+// 流结束处理
+currentEventSource.addEventListener('end', function(event) {
+console.log("Stream ended:", event.data);
+closeStream();
+// 确保在流结束后再次渲染数学表达式和添加复制按钮
+setTimeout(() => {
+renderMath();
+addCopyButtons();
+}, 100);
+});
+
+// 流错误处理
+currentEventSource.onerror = function(err) {
+console.error("EventSource failed:", err);
+
+if (isFirstChunk) {
+botMsgDiv.innerHTML = md2html(accumulatedMd + '\\\\n\\\\n[连接错误或流中断]');
+botMsgDiv.classList.remove('thinking');
+} else {
+botMsgDiv.innerHTML = md2html(accumulatedMd + '\\\\n\\\\n[连接错误或流中断]');
+}
+
+// 错误情况下也尝试渲染数学表达式和添加复制按钮
+renderMath();
+addCopyButtons();
+closeStream();
+};
+} catch(err) {
+console.error("发送消息或连接流失败:", err);
+appendMsg(`**错误：**\\\\n无法发送消息或连接到流服务。\\\\n${err.message}`, 'bot');
+sendBtn.disabled = false;
+sendBtn.textContent = '发送';
+}
+};
+
+// 关闭流
+function closeStream() {
+if (currentEventSource) {
+currentEventSource.close();
+currentEventSource = null;
+console.log("EventSource closed.");
+}
+
+sendBtn.disabled = false;
+sendBtn.textContent = '发送';
+}
+
+// 修改导出按钮的点击事件
+exportBtn.onclick = async () => {
+try {
+// 检查是否有对话历史
+const historyResponse = await fetch('/history');
+const historyData = await historyResponse.json();
+
+if (!historyData || historyData.length === 0) {
+alert("当前没有可导出的对话历史");
+return;
+}
+
+exportBtn.disabled = true;
+exportBtn.textContent = '导出中...';
+
+// 请求导出
+const response = await fetch('/export');
+
+if (!response.ok) {
+throw new Error(`导出失败: ${response.status}`);
+}
+
+// 获取文件名
+const contentDisposition = response.headers.get('Content-Disposition');
+let filename = '对话历史.html';
+if (contentDisposition) {
+const matches = /filename="(.+)"/.exec(contentDisposition);
+if (matches) {
+filename = matches[1];
+}
+}
+
+// 下载文件
+const blob = await response.blob();
+const url = window.URL.createObjectURL(blob);
+const a = document.createElement('a');
+a.href = url;
+a.download = filename;
+document.body.appendChild(a);
+a.click();
+window.URL.revokeObjectURL(url);
+document.body.removeChild(a);
+
+console.log('对话历史导出成功');
+} catch (error) {
+console.error('导出失败:', error);
+alert('导出对话历史失败: ' + error.message);
+} finally {
+exportBtn.disabled = false;
+exportBtn.textContent = '导出';
+}
+};
+
+// 新话题
+newTopicBtn.onclick = async () => {
+if (currentEventSource && currentEventSource.readyState !== EventSource.CLOSED) {
+if (!confirm("当前回复仍在进行中，确定要强制开启新话题吗？")) return;
+closeStream();
+} else {
+if (!confirm("确定要开启新话题？这会清空全部对话。")) return;
+}
+
+try {
+await fetch('/reset', { method: 'POST' });
+historyBox.innerHTML = '';
+resetInputArea();
+console.log("新话题已开启");
+} catch (err) {
+console.error("重置会话失败:", err);
+alert("开启新话题失败，请检查后端服务。");
+}
+};
+
+// 预览图片
+previewImage.onclick = () => {
+if (imageLocalURL) {
+openViewer(imageLocalURL);
+}
+};
+
+// 点击历史消息中的图片
+historyBox.addEventListener('click', e => {
+if (e.target.tagName === 'IMG') {
+openViewer(e.target.src);
+}
+});
+
+// 关闭图片查看器
+viewer.onclick = () => {
+viewer.style.opacity = '0';
+setTimeout(() => {
+viewer.style.display = 'none';
+viewer.style.opacity = '1';
+}, 300);
+};
+
+// 打开图片查看器
+function openViewer(src) {
+if (!src || src.startsWith('data:image/png;base64,' + '...')) return;
+
+viewerImg.src = src;
+viewer.style.display = 'flex';
+viewer.classList.add('visible');
+}
+
+// 输入框快捷键
+textInput.addEventListener("keydown", function(event) {
+if (event.key === "Enter") {
+if (!event.shiftKey) {
+event.preventDefault();
+sendBtn.click();
+}
+}
+});
+
+// 自动调整输入框高度
+textInput.addEventListener('input', function() {
+// 可以添加自动高度调整逻辑
+});
+
+</script>
 </body>
 </html>

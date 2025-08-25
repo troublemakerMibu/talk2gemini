@@ -5,16 +5,17 @@ import base64
 import io
 import json # 确保导入 json
 from flask import Flask, Response, render_template, request, jsonify, send_from_directory, render_template_string # 引入 Response 和 render_template_string
-from config import key_manager, MODEL_BASE_URL, PORT, BASE_PROMPT, MODELS
+from config import key_manager, MODEL_BASE_URL, PORT, BASE_PROMPT, MODELS, NoAvailableKeysError
 from PIL import Image
 from threading import Lock
-
+from datetime import datetime
+from urllib.parse import quote
 
 # ----------------- 基础配置 -----------------
 HEADERS = {"Content-Type": "application/json"}
 chat_history_lock = Lock()  # 全局锁
-last_used_key = None
-last_used_key_lock = Lock()
+# 用于实现“能力保持”的变量，记录上一次成功请求的key
+last_successful_key = None
 
 app = Flask(__name__, template_folder='templates')
 chat_history = [] # 直接保存成 Google Gemini 兼容格式（role / parts）
@@ -24,25 +25,42 @@ current_bot_response_full = ""
 # ------- 在原有 Flask 路由后面加上两个新接口 --------
 @app.route('/reset', methods=['POST'])
 def reset():
-    global chat_history, current_bot_response_full
+    global chat_history, current_bot_response_full, last_successful_key
     chat_history.clear()
     current_bot_response_full = "" # 重置时也清空
+    last_successful_key = None
     return jsonify({'ok': True})
 
 # ----------------- 调用大模型 (流式) -----------------
 def stream_gemini_response(history, model, tools=None):
-    global current_bot_response_full, chat_history, last_used_key_lock, last_used_key
+    global current_bot_response_full, chat_history, last_successful_key
     current_bot_response_full = ""
-    max_retries = key_manager.get_status()["valid_keys"]
-    for attempt in range(max_retries+1):
+
+    # 获取可用密钥数作为最大重试次数
+    max_retries = key_manager.get_status()["available_keys"]
+    if max_retries == 0:
+        error_msg = "错误：密钥池中没有可用的密钥。"
+        current_bot_response_full = error_msg
+        yield f"data: {json.dumps({'text': error_msg})}\n\n"
+        yield f"event: end\ndata: [DONE]\n\n"
+        return
+
+    for attempt in range(max_retries):
+        api_key = None  # 在 try 外部定义，便于 except 块中引用
         try:
-            with last_used_key_lock:
-                # 优先使用上一次的key
-                if last_used_key is not None:
-                    api_key = last_used_key
-                else:
-                    api_key = key_manager.get_next_key()
-            print(f"正在使用 API Key: {api_key}")
+            # 调用新的 get_key 方法，并传入上一次成功的 key 作为首选
+            api_key = key_manager.get_key(preferred_key=last_successful_key, force_paid=False)
+
+            # 获取密钥详细信息
+            key_status = key_manager.get_detailed_key_status(api_key)
+            key_type = "未知"
+            if key_status.get('details') and len(key_status['details']) > 0:
+                key_type = key_status['details'][0].get('key_type', '未知')
+
+            print(f"正在使用 API Key: {api_key} (尝试 {attempt + 1}/{max_retries})"
+                  f"\n当前key层级：{key_type}"
+                  f"\n免费层级失败次数：{key_manager.get_status()['free_key_consecutive_failures']}")
+
             url = f"{MODEL_BASE_URL}{model}:streamGenerateContent?alt=sse&key={api_key}"
             payload = {"contents": history}
             if tools:
@@ -52,8 +70,9 @@ def stream_gemini_response(history, model, tools=None):
                 resp.raise_for_status()
 
                 if 'text/event-stream' not in resp.headers.get('Content-Type', ''):
-                    raise ValueError("非流式响应")
+                    raise ValueError("响应非流式格式，请检查API端点或密钥权限。")
 
+                # 流式处理响应
                 for line in resp.iter_lines():
                     if line:
                         decoded_line = line.decode('utf-8')
@@ -63,52 +82,83 @@ def stream_gemini_response(history, model, tools=None):
                                 text_chunk = data['candidates'][0]['content']['parts'][0]['text']
                                 current_bot_response_full += text_chunk
                                 yield f"data: {json.dumps({'text': text_chunk})}\n\n"
-                            except Exception as e:
-                                print(f"解析响应失败: {e}")
-                                pass
+                            except (json.JSONDecodeError, KeyError, IndexError) as e:
+                                print(f"解析响应数据块失败: {e}")
+                                pass  # 忽略解析失败的行
 
-                # 成功完成流，更新 last_used_key
-                with last_used_key_lock:
-                    last_used_key = api_key
+                # 成功完成流，记录成功并跳出重试循环
+                key_manager.record_success(api_key)
+                last_successful_key = api_key
+                print(f"API调用成功，使用密钥: {api_key}")
                 break
 
-        except requests.exceptions.RequestException as e:
-            print(f"请求失败 (尝试 {attempt + 1}/{max_retries}): {e}")
-            if attempt < max_retries:
-                if e.response.status_code == 429:
-                    key_manager.temporarily_suspend_key(api_key, cooldown=300)
-                    print(f"[速率限制] API Key '{api_key}' 已被挂起，将在 300 秒后恢复。")
-                    with last_used_key_lock:
-                        last_used_key = None
-                elif e.response.status_code in [400, 403]:
+        except NoAvailableKeysError as e:
+            # 捕获自定义的异常
+            print(f"获取密钥失败: {e}")
+            error_msg = f"错误: {e}"
+            current_bot_response_full = error_msg
+            yield f"data: {json.dumps({'text': error_msg})}\n\n"
+            break  # 没有可用密钥了，直接结束
+
+        except requests.exceptions.HTTPError as e:
+            print(f"请求失败 (API Key: {api_key}): {e}")
+            status_code = e.response.status_code
+
+            # 只记录一次失败，并根据错误代码处理密钥
+            if api_key:
+                # 先记录失败
+                key_manager.record_failure(api_key, status_code)
+
+                # 然后根据错误代码进行相应处理
+                if status_code == 429:
+                    key_manager.temporarily_suspend_key(api_key)
+                    print(f"密钥 {api_key} 因达到速率限制被临时挂起")
+                elif status_code in [400, 403]:
                     key_manager.mark_key_invalid(api_key)
-                    print(f"[无效的 API Key] API Key '{api_key}' 已被标记为无效。")
-                    with last_used_key_lock:
-                        last_used_key  = None
-                elif e.response.status_code >= 500:
-                    key_manager.temporarily_suspend_key(api_key, cooldown=300)
-                    print(f"[服务器错误] API Key '{api_key}' 已被挂起，将在 300 秒后恢复。")
-                    with last_used_key_lock:
-                        last_used_key = None
+                    print(f"密钥 {api_key} 因认证失败被永久移除")
+                elif status_code >= 500:
+                    key_manager.temporarily_suspend_key(api_key)
+                    print(f"密钥 {api_key}因服务器错误被临时挂起")
                 else:
-                    key_manager.mark_key_invalid(api_key)
-                    with last_used_key_lock:
-                        last_used_key  = None
-            else:
-                error_msg = f"请求失败: {e}"
-                current_bot_response_full = f"请求失败,错误状态码： {e.response.status_code}"
+                    # 对于其他错误，临时挂起而不是永久移除
+                    key_manager.temporarily_suspend_key(api_key)
+                    print(f"密钥 {api_key} 因错误 {status_code} 被临时挂起")
+
+            if attempt >= max_retries - 1:  # 如果是最后一次尝试
+                error_msg = f"所有密钥均尝试失败。最后错误状态码: {status_code}"
+                current_bot_response_full = error_msg
                 yield f"data: {json.dumps({'text': error_msg})}\n\n"
 
         except Exception as e:
-            print(f"处理流失败: {e}")
+            print(f"处理流时发生未知错误: {e}")
+            # 记录未知错误
+            if api_key:
+                key_manager.record_failure(api_key, 0)  # 使用 0 表示未知错误
+                key_manager.temporarily_suspend_key(api_key)  # 临时挂起而不是永久移除
+
             error_msg = f"处理流失败: {e}"
             current_bot_response_full = error_msg
             yield f"data: {json.dumps({'text': error_msg})}\n\n"
-    print(key_manager.get_status())
+
+            if attempt >= max_retries - 1:  # 如果是最后一次尝试
+                break
+
+    # 输出当前密钥池状态
+    status = key_manager.get_status()
+    print(f"密钥池状态汇总:")
+    print(f"- 可用密钥总数: {status['available_keys']}")
+    print(f"- 挂起密钥总数: {status['suspended_keys']}")
+    print(f"- 免费密钥连续失败: {status['free_key_consecutive_failures']}/{status['max_free_key_failures']}")
+
+    for key_type, stats in status['key_statistics'].items():
+        print(f"- {key_type}密钥: 总数：{stats['total']}, 可用：{stats['available']}, 挂起：{stats['suspended']}")
+
     # 将模型回复添加到 chat_history
     if current_bot_response_full:
         with chat_history_lock:
-            chat_history.append({'role': 'model', 'parts': [{'text': current_bot_response_full}]})
+            # 只有当历史记录的最后一条是'user'时才添加'model'回复，防止重复添加
+            if not chat_history or chat_history[-1]['role'] == 'user':
+                chat_history.append({'role': 'model', 'parts': [{'text': current_bot_response_full}]})
 
     yield f"event: end\ndata: [DONE]\n\n"
     time.sleep(0.1)
@@ -116,11 +166,8 @@ def stream_gemini_response(history, model, tools=None):
 
 
 
-
-
-
-# ----------------- 图片压缩（> 3.6 MB 自动压） -----------------
-def maybe_compress_image(b64, target_kb=3600):
+# ----------------- 图片压缩（> 18.5 MB 自动压） -----------------
+def maybe_compress_image(b64, target_kb=189400):
     # ... (代码不变) ...
     raw = base64.b64decode(b64)
     if len(raw) <= target_kb * 1024:
@@ -136,30 +183,12 @@ def maybe_compress_image(b64, target_kb=3600):
         quality -= 5
 
 
-
 # ----------------- Flask 路由 -----------------
 @app.route('/')
 def index():
     return render_template('index.html', models=MODELS)
-    # 为了简单起见，直接渲染字符串模板，避免文件依赖问题
-    # 在实际项目中，推荐使用 render_template
-    # with open('templates/index.html', 'r', encoding='utf-8') as f:
-    #     html_content = f.read()
-    # # 手动替换模板变量（如果 index.html 中有 {{ models }}）
-    # model_options = "".join([f'<option value="{model}">{model}</option>' for model in MODELS])
-    # html_content = html_content.replace('{% for model in models %}{% endfor %}', model_options) # 简陋替换
-    # # 或者更健壮的方式是用 Jinja2 渲染字符串
-    #
-    # template = Template(html_content)
-    # return template.render(models=MODELS)
 
-# 在文件中任意位置添加
-@app.route('/models')
-def get_models():
-    """
-    新增的模型列表接口
-    """
-    return jsonify(MODELS)
+
 
 @app.route('/history')
 def history():
@@ -278,6 +307,7 @@ def stream():
     # 使用流式生成器函数作为响应体
     # 传递当前的 chat_history 副本，避免在生成过程中被外部修改影响
     return Response(stream_gemini_response(list(chat_history), model, tools), mimetype='text/event-stream')
+
 
 
 
