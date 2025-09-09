@@ -1047,6 +1047,7 @@ def chat_initiate():
         data = request.get_json(force=True)
         text  = (data.get('text') or '').strip()
         img_b64 = data.get('image')
+        suppress_base_prompt = bool(data.get('suppress_base_prompt'))  # 新增
 
         if not text and not img_b64:
             # 如果用户既没有输入文本也没有上传图片，则不允许发送
@@ -1056,9 +1057,9 @@ def chat_initiate():
         # -------- 组装 user 消息 --------
         parts = []
 
-        # !! 核心改动：检查 chat_history 是否为空 !!
+        # !! 核心改动：检查 chat_history 是否为空 !!仅当未抑制且 BASE_PROMPT 非空时注入
         is_first_message = not chat_history
-        if is_first_message and BASE_PROMPT: # 确保 BASE_PROMPT 有内容
+        if is_first_message and BASE_PROMPT and not suppress_base_prompt:
             # 如果是第一条消息，并且 BASE_PROMPT 非空，则将其作为第一个 part 添加
             parts.append({'text': BASE_PROMPT})
 
@@ -1075,12 +1076,7 @@ def chat_initiate():
                 parts.append({'inline_data': {'mime_type': mime, 'data': img_b64}})
             except Exception as e:
                 print(f"Error compressing image: {e}")
-                # 根据需要决定是否返回错误或继续（不带图片）
-                # return jsonify({'error': '图片处理失败'}), 500
-                # 这里选择继续，但不添加图片 part
                 pass
-
-
         # 再次检查 parts 是否为空 (理论上，如果 text 或 img_b64 至少有一个，就不会为空)
         # 但如果 BASE_PROMPT 是唯一内容且用户未输入，前面的检查会阻止
         if not parts:
@@ -1091,10 +1087,6 @@ def chat_initiate():
         user_msg = {'role': 'user', 'parts': parts}
         # 将构造好的用户消息添加到历史记录中
         chat_history.append(user_msg)
-
-        # print("Chat history updated:", chat_history[-1]) # Debugging: 打印最后添加的消息
-
-        # -------- 不再调用 LLM，直接返回成功 --------
         return jsonify({'ok': True})
 
 

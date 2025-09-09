@@ -359,6 +359,24 @@ order: -1;
 margin-bottom: 8px;
 }
 }
+
+
+#genImage:disabled + span,
+#genImage:disabled {
+opacity: .5;
+cursor: not-allowed;
+}
+.genimage-enabled {
+color: var(--primary-color);
+font-weight: 600;
+}
+.genimage-checked {
+color: #2ecc71;
+font-weight: 700;
+}
+.genimage-checked::before {
+content: '🖼 ';
+}
 </style>
 {% endraw %}
 <script src="/static/marked.min.js" defer></script>
@@ -385,7 +403,9 @@ margin-bottom: 8px;
 <input type="checkbox" id="enableSearch">
 联网搜索
 </label>
-
+<label style="display: flex; align-items: center; gap: 5px;">
+<input type="checkbox" id="genImage">生成图片
+</label>
 <div id="preview-container">
 <img id="preview-img" alt="预览图片">
 <button id="remove-image-btn" title="移除图片">×</button>
@@ -404,6 +424,7 @@ margin-bottom: 8px;
 const $ = id => document.getElementById(id);
 
 // DOM 元素引用
+const genImage = $("genImage");
 const historyBox = $("history");
 const textInput = $("text-input");
 const previewContainer = $("preview-container");
@@ -580,16 +601,39 @@ console.error("加载历史记录失败:", error);
 historyBox.innerHTML = '<div class="msg bot">加载历史记录失败，请刷新页面或检查后端服务。</div>';
 }
 }
-
+//在初始化与模型选择变化时控制启用状态：
+function syncGenImageAvailability() {
+const ok = modelSelect.value === 'gemini-2.5-flash-image-preview';
+genImage.disabled = !ok;
+// 切换“可用时高亮”样式
+const labelSpan = genImage.nextElementSibling;
+if (labelSpan) {
+labelSpan.classList.toggle('genimage-enabled', ok && !genImage.checked);
+labelSpan.classList.toggle('genimage-checked', ok && genImage.checked);
+}
+}
 // 初始加载
 document.addEventListener('DOMContentLoaded', function() {
 loadHistory();
-
+if (!genImage.nextElementSibling) {
+const text = document.createTextNode('生成图片'); // 兜底
+const span = document.createElement('span');
+// 如果原来已经有文本节点，搬过去；否则用兜底文本
+const origText = genImage.parentNode.lastChild;
+if (origText && origText.nodeType === Node.TEXT_NODE) {
+span.textContent = origText.textContent.trim() || '生成图片';
+genImage.parentNode.removeChild(origText);
+} else {
+span.textContent = '生成图片';
+}
+genImage.parentNode.appendChild(span);
+}
 // 调整高度以填充整个视图
 adjustHeight();
 window.addEventListener('resize', adjustHeight);
+syncGenImageAvailability();
 });
-
+modelSelect.addEventListener('change', syncGenImageAvailability);
 // 调整高度，解决底部空白问题
 function adjustHeight() {
 const windowHeight = window.innerHeight;
@@ -718,7 +762,13 @@ if (currentEventSource && currentEventSource.readyState !== EventSource.CLOSED) 
 alert("请等待当前回复完成后再发送新消息。");
 return;
 }
-
+genImage.addEventListener('change', function() {
+const ok = !genImage.disabled;
+const labelSpan = genImage.nextElementSibling;
+if (!labelSpan) return;
+labelSpan.classList.toggle('genimage-enabled', ok && !genImage.checked);
+labelSpan.classList.toggle('genimage-checked', ok && genImage.checked);
+});
 const model = modelSelect.value;
 const searchEnabled = enableSearch.checked;
 const userTextToSend = txt;
@@ -752,7 +802,8 @@ body: JSON.stringify({
 text: userTextToSend,
 image: userImageToSend,
 model: model,
-enable_search: searchEnabled
+enable_search: searchEnabled,
+    suppress_base_prompt: !!genImage.checked   // 新增
 })
 });
 
