@@ -801,7 +801,27 @@ console.error("解析 SSE 数据块失败:", e, "数据:", event.data);
 botMsgDiv.innerHTML += "<br>[数据解析错误]";
 }
 };
+// 图片事件：把模型生成的图片插入当前 AI 回复块
+currentEventSource.addEventListener('image', function(event) {
+  try {
+    const imgData = JSON.parse(event.data); // { mime_type, data }
+    if (!imgData || !imgData.data) return;
 
+    const src = `data:${imgData.mime_type || 'image/png'};base64,${imgData.data}`;
+
+    // 在当前的 botMsgDiv 内部追加图片
+    const imgHtml = `<div><img src="${src}" alt="AI 生成图片" style="max-width:260px; border-radius:6px; margin-top:6px;"></div>`;
+    // 如果还是“正在思考...”状态，先去掉
+    botMsgDiv.classList.remove('thinking');
+    // 直接在末尾追加，不破坏已累积的文本
+    botMsgDiv.innerHTML = botMsgDiv.innerHTML + imgHtml;
+
+    // 滚动到底部
+    historyBox.scrollTop = historyBox.scrollHeight;
+  } catch (e) {
+    console.error("解析 image 事件失败:", e, "数据:", event.data);
+  }
+});
 // 流结束处理
 currentEventSource.addEventListener('end', function(event) {
 console.log("Stream ended:", event.data);

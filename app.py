@@ -13,6 +13,12 @@ from PIL import Image
 from threading import Lock
 from datetime import datetime
 from urllib.parse import quote
+import hashlib
+from json import JSONDecodeError
+from json import JSONDecoder
+import re
+
+
 
 # ----------------- 基础配置 -----------------
 HEADERS = {"Content-Type": "application/json"}
@@ -34,22 +40,61 @@ def reset():
     last_successful_key = None
     return jsonify({'ok': True})
 
-# ----------------- 调用大模型 (流式) -----------------
 def stream_gemini_response(history, model, tools=None):
     global current_bot_response_full, chat_history, last_successful_key
     current_bot_response_full = ""
 
+    # 用于收集本次模型的完整 parts（含 text 与 inline_data）
+    model_parts_collected = []
+    # 避免重复发同一张图片（部分模型可能重复推送）
+    emitted_image_hashes = set()
+
+    def _normalize_part(p):
+        """
+        归一化模型 part，统一成：
+        - 文本: {'text': str}
+        - 图片: {'inline_data': {'mime_type': str, 'data': str}}
+        """
+        if not isinstance(p, dict):
+            return None
+
+        # 文本
+        if 'text' in p and isinstance(p['text'], str):
+            return {'text': p['text']}
+
+        # 图片：camelCase -> snake_case
+        if 'inlineData' in p and isinstance(p['inlineData'], dict):
+            idata = p['inlineData']
+            return {
+                'inline_data': {
+                    'mime_type': idata.get('mimeType', 'image/png'),
+                    'data': idata.get('data', '')
+                }
+            }
+
+        # 已是 snake_case
+        if 'inline_data' in p and isinstance(p['inline_data'], dict):
+            return {
+                'inline_data': {
+                    'mime_type': p['inline_data'].get('mime_type', 'image/png'),
+                    'data': p['inline_data'].get('data', '')
+                }
+            }
+
+        return None
+
     # 获取可用密钥数作为最大重试次数
-    max_retries = key_manager.get_status()["available_keys"]
+    status0 = key_manager.get_status()
+    max_retries = status0["available_keys"]
     if max_retries == 0:
         error_msg = "错误：密钥池中没有可用的密钥。"
         current_bot_response_full = error_msg
         yield f"data: {json.dumps({'text': error_msg})}\n\n"
-        yield f"event: end\ndata: [DONE]\n\n"
+        yield "event: end\ndata: [DONE]\n\n"
         return
 
     for attempt in range(max_retries):
-        api_key = None  # 在 try 外部定义，便于 except 块中引用
+        api_key = None
         try:
             # 调用新的 get_key 方法，并传入上一次成功的 key 作为首选
             api_key = key_manager.get_key(preferred_key=last_successful_key, force_paid=False)
@@ -60,9 +105,11 @@ def stream_gemini_response(history, model, tools=None):
             if key_status.get('details') and len(key_status['details']) > 0:
                 key_type = key_status['details'][0].get('key_type', '未知')
 
-            print(f"正在使用 API Key: {api_key} (尝试 {attempt + 1}/{max_retries})"
-                  f"\n当前key层级：{key_type}"
-                  f"\n免费层级失败次数：{key_manager.get_status()['free_key_consecutive_failures']}")
+            print(
+                f"正在使用 API Key: {api_key} (尝试 {attempt + 1}/{max_retries})"
+                f"\n当前key层级：{key_type}"
+                f"\n免费层级失败次数：{key_manager.get_status()['free_key_consecutive_failures']}"
+            )
 
             url = f"{MODEL_BASE_URL}{model}:streamGenerateContent?alt=sse&key={api_key}"
             payload = {"contents": history}
@@ -75,44 +122,98 @@ def stream_gemini_response(history, model, tools=None):
                 if 'text/event-stream' not in resp.headers.get('Content-Type', ''):
                     raise ValueError("响应非流式格式，请检查API端点或密钥权限。")
 
-                # 流式处理响应
-                for line in resp.iter_lines():
-                    if line:
-                        decoded_line = line.decode('utf-8')
-                        if decoded_line.startswith('data: '):
-                            try:
-                                data = json.loads(decoded_line[6:])
-                                text_chunk = data['candidates'][0]['content']['parts'][0]['text']
-                                current_bot_response_full += text_chunk
-                                yield f"data: {json.dumps({'text': text_chunk})}\n\n"
-                            except (json.JSONDecodeError, KeyError, IndexError) as e:
-                                print(f"解析响应数据块失败: {e}")
-                                pass  # 忽略解析失败的行
+                decoder = JSONDecoder()
 
-                # 成功完成流，记录成功并跳出重试循环
+                # 流式处理响应
+                for raw_line in resp.iter_lines():
+                    if not raw_line:
+                        continue
+                    decoded_line = raw_line.decode('utf-8', errors='ignore')
+                    if not decoded_line.startswith('data: '):
+                        continue
+
+                    # 可能出现多个 JSON 连在一个 data: 后面 → 使用 raw_decode 连续解码
+                    s = decoded_line[6:].strip()
+                    idx = 0
+                    n = len(s)
+                    while idx < n:
+                        # 跳过空白
+                        while idx < n and s[idx].isspace():
+                            idx += 1
+                        if idx >= n:
+                            break
+                        if s[idx] != '{':
+                            # 遇到非 JSON 起始（例如 [DONE]），中止这一行
+                            break
+                        try:
+                            obj, consumed = decoder.raw_decode(s, idx)
+                            idx = consumed
+                        except JSONDecodeError:
+                            # 半包或异常，放弃这一行剩余内容
+                            break
+
+                        try:
+                            candidates = obj.get('candidates', [])
+                            if not candidates:
+                                continue
+                            content = candidates[0].get('content', {}) or {}
+                            parts = content.get('parts', []) or []
+                        except Exception as e:
+                            print(f"SSE 对象结构异常: {e}")
+                            continue
+
+                        # 遍历本次 JSON 对象里的所有 parts
+                        for p in parts:
+                            norm = _normalize_part(p)
+                            if not norm:
+                                continue
+
+                            # 文本
+                            if 'text' in norm:
+                                text_chunk = norm['text']
+                                if text_chunk:
+                                    current_bot_response_full += text_chunk
+                                    model_parts_collected.append({'text': text_chunk})
+                                    # 仍旧通过默认 message 事件向前端推送文本
+                                    yield f"data: {json.dumps({'text': text_chunk})}\n\n"
+
+                            # 图片
+                            elif 'inline_data' in norm:
+                                mime_type = norm['inline_data'].get('mime_type', 'image/png')
+                                b64data = norm['inline_data'].get('data', '')
+                                if b64data:
+                                    # 去重
+                                    h = hashlib.md5((mime_type + ':' + b64data[:2048]).encode('utf-8')).hexdigest()
+                                    if h not in emitted_image_hashes:
+                                        emitted_image_hashes.add(h)
+                                        # 推送图片事件
+                                        payload_img = {'mime_type': mime_type, 'data': b64data}
+                                        yield f"event: image\ndata: {json.dumps(payload_img)}\n\n"
+                                        # 记录到 parts
+                                        model_parts_collected.append({
+                                            'inline_data': {'mime_type': mime_type, 'data': b64data}
+                                        })
+
+                # 成功完成流
                 key_manager.record_success(api_key)
                 last_successful_key = api_key
                 print(f"API调用成功，使用密钥: {api_key}")
                 break
 
         except NoAvailableKeysError as e:
-            # 捕获自定义的异常
             print(f"获取密钥失败: {e}")
             error_msg = f"错误: {e}"
             current_bot_response_full = error_msg
             yield f"data: {json.dumps({'text': error_msg})}\n\n"
-            break  # 没有可用密钥了，直接结束
+            break
 
         except requests.exceptions.HTTPError as e:
             print(f"请求失败 (API Key: {api_key}): {e}")
             status_code = e.response.status_code
 
-            # 只记录一次失败，并根据错误代码处理密钥
+            # 记录失败并根据错误处理密钥
             if api_key:
-                # 先记录失败
                 key_manager.record_failure(api_key, status_code)
-
-                # 然后根据错误代码进行相应处理
                 if status_code == 429:
                     key_manager.temporarily_suspend_key(api_key)
                     print(f"密钥 {api_key} 因达到速率限制被临时挂起")
@@ -121,49 +222,44 @@ def stream_gemini_response(history, model, tools=None):
                     print(f"密钥 {api_key} 因认证失败被永久移除")
                 elif status_code >= 500:
                     key_manager.temporarily_suspend_key(api_key)
-                    print(f"密钥 {api_key}因服务器错误被临时挂起")
+                    print(f"密钥 {api_key} 因服务器错误被临时挂起")
                 else:
-                    # 对于其他错误，临时挂起而不是永久移除
                     key_manager.temporarily_suspend_key(api_key)
                     print(f"密钥 {api_key} 因错误 {status_code} 被临时挂起")
 
-            if attempt >= max_retries - 1:  # 如果是最后一次尝试
+            if attempt >= max_retries - 1:
                 error_msg = f"所有密钥均尝试失败。最后错误状态码: {status_code}"
                 current_bot_response_full = error_msg
                 yield f"data: {json.dumps({'text': error_msg})}\n\n"
 
         except Exception as e:
             print(f"处理流时发生未知错误: {e}")
-            # 记录未知错误
             if api_key:
-                key_manager.record_failure(api_key, 0)  # 使用 0 表示未知错误
-                key_manager.temporarily_suspend_key(api_key)  # 临时挂起而不是永久移除
-
+                key_manager.record_failure(api_key, 0)  # 0 表示未知错误
+                key_manager.temporarily_suspend_key(api_key)
             error_msg = f"处理流失败: {e}"
             current_bot_response_full = error_msg
             yield f"data: {json.dumps({'text': error_msg})}\n\n"
-
-            if attempt >= max_retries - 1:  # 如果是最后一次尝试
+            if attempt >= max_retries - 1:
                 break
 
     # 输出当前密钥池状态
     status = key_manager.get_status()
-    print(f"密钥池状态汇总:")
+    print("密钥池状态汇总:")
     print(f"- 可用密钥总数: {status['available_keys']}")
     print(f"- 挂起密钥总数: {status['suspended_keys']}")
     print(f"- 免费密钥连续失败: {status['free_key_consecutive_failures']}/{status['max_free_key_failures']}")
-
     for key_type, stats in status['key_statistics'].items():
         print(f"- {key_type}密钥: 总数：{stats['total']}, 可用：{stats['available']}, 挂起：{stats['suspended']}")
 
-    # 将模型回复添加到 chat_history
-    if current_bot_response_full:
+    # 将模型回复添加到 chat_history：用收集到的 parts（含图片）
+    if model_parts_collected:
         with chat_history_lock:
             # 只有当历史记录的最后一条是'user'时才添加'model'回复，防止重复添加
             if not chat_history or chat_history[-1]['role'] == 'user':
-                chat_history.append({'role': 'model', 'parts': [{'text': current_bot_response_full}]})
+                chat_history.append({'role': 'model', 'parts': model_parts_collected})
 
-    yield f"event: end\ndata: [DONE]\n\n"
+    yield "event: end\ndata: [DONE]\n\n"
     time.sleep(0.1)
 
 @app.route('/export', methods=['GET'])
@@ -635,7 +731,6 @@ def export_history():
     # 处理数学公式的函数
     def process_math_formulas(text):
         """处理文本中的数学公式"""
-        import re
 
         # 首先保护代码块中的内容
         code_blocks = []
@@ -701,7 +796,6 @@ def export_history():
     # 修改markdown2的处理，为代码块添加包装器
     def process_code_blocks(html_content):
         """为代码块添加复制按钮"""
-        import re
         import uuid
 
         def wrap_code_block(match):
@@ -722,43 +816,52 @@ def export_history():
                 return wrapped
             return code_block
 
-        # 查找所有代码块并添加包装器
-        html_content = re.sub(r'<pre><code[^>]*?>.*?</code></pre>', wrap_code_block, html_content, flags=re.DOTALL)
+        html_content = re.sub(r'<pre><code>.? < / code > < / pre > ', wrap_code_block, html_content, flags=re.DOTALL)
         return html_content
 
-    # 构建消息HTML
+    # 构建消息HTML（合并相邻文本 part）
     messages_html = []
     message_count = 0
 
     for msg in chat_history:
         message_count += 1
-        role = msg['role']
+        role = msg.get('role', 'model')
         role_display = '用户' if role == 'user' else 'AI助手'
         message_class = 'user' if role == 'user' else 'bot'
         avatar_text = '我' if role == 'user' else 'AI'
 
         content_parts = []
-        for part in msg.get('parts', []):
-            if 'text' in part:
-                # 先处理数学公式
-                text_with_math = process_math_formulas(part['text'])
+        text_buffer = []
 
+        def flush_text():
+            nonlocal content_parts, text_buffer
+            if text_buffer:
+                merged = ''.join(text_buffer)  # 不人为加换行，保持句子连贯
+                # 先处理数学公式
+                text_with_math = process_math_formulas(merged)
                 # 转换Markdown到HTML
                 text_html = markdown2.markdown(
                     text_with_math,
                     extras=['fenced-code-blocks', 'tables', 'break-on-newline', 'code-friendly']
                 )
-
                 # 为代码块添加复制按钮
                 text_html = process_code_blocks(text_html)
-
                 content_parts.append(text_html)
+                text_buffer = []
+
+        for part in msg.get('parts', []):
+            if 'text' in part:
+                text_buffer.append(part['text'])
             elif 'inline_data' in part:
-                # 嵌入图片
+                # 先冲刷已有文本，再插入图片
+                flush_text()
                 img_html = f'<img src="data:{part["inline_data"]["mime_type"]};base64,{part["inline_data"]["data"]}" alt="图片">'
                 content_parts.append(img_html)
 
-        # 改进的消息HTML结构
+        # 处理残留文本
+        flush_text()
+
+        # 单条消息 HTML
         message_html = f'''
         <div class="message {message_class}">
             <div class="message-header">
@@ -792,13 +895,11 @@ def export_history():
             'Content-Type': 'text/html; charset=utf-8'
         }
     )
-
     return response
 
 
 # ----------------- 图片压缩（> 18.5 MB 自动压） -----------------
 def maybe_compress_image(b64, target_kb=189400):
-    # ... (代码不变) ...
     raw = base64.b64decode(b64)
     if len(raw) <= target_kb * 1024:
         return b64
@@ -814,7 +915,6 @@ def maybe_compress_image(b64, target_kb=189400):
 
 # ----------------- 截图（最小化浏览器 + 框选区域） -----------------
 def grab_screen_interactive():
-    # ... (代码不变) ...
     try:
         import pygetwindow as gw
         win = gw.getActiveWindow();  win.minimize()
@@ -876,33 +976,63 @@ def index():
 def history():
     """
     给前端读取完整历史 → 前端自己渲染 markdown
-    (这个接口保持不变，用于页面加载时恢复历史)
+    使用“合并相邻文本 part”的策略，避免一句话被拆成多行
     """
+    global chat_history
     md_list = []
-    # 遍历 history 时要小心，流式传输过程中可能 history 还没完全更新
-    # 但这个接口主要用于初始加载，问题不大
-    temp_history = list(chat_history) # 复制一份以防迭代时修改
-    for msg in temp_history:
-        if msg['role'] == 'user':
-            md = ''
-            for part in msg['parts']:
-                if 'text' in part:
-                    md += part['text'] + '\n'
-                if 'inline_data' in part:
-                    # 保持不变，只给占位符
-                    md += '![图片](data:%s;base64,%s)\n' % (
-                        part['inline_data']['mime_type'],
-                        part['inline_data']['data'][:30]+'...')
-            md_list.append({'who': 'user', 'md': md})
-        elif msg['role'] == 'model': # 确保是 model 角色
-             # 检查 parts 是否存在且不为空
-             if 'parts' in msg and msg['parts'] and 'text' in msg['parts'][0]:
-                 md_list.append({'who': 'bot',  'md': msg['parts'][0]['text']})
-             else:
-                 # 处理可能的空 parts 或格式问题
-                 print(f"警告：历史记录中发现格式异常的 model 消息: {msg}")
-                 md_list.append({'who': 'bot', 'md': '[空回复或格式错误]'})
 
+    # 拷贝一份以防遍历时外部修改
+    temp_history = list(chat_history)
+
+    for msg in temp_history:
+        role = msg.get('role')
+        if role == 'user':
+            md = ''
+            for part in msg.get('parts', []):
+                if 'text' in part:
+                    md += part['text'] + '\n'  # 用户输入按原逻辑，允许多行
+                if 'inline_data' in part:
+                    md += '<br><br>![alt text](data:%s;base64,%s)\n' % (
+                        part['inline_data'].get('mime_type', 'image/png'),
+                        (part['inline_data'].get('data', '')[:30] + '...')
+                    )
+            md_list.append({'who': 'user', 'md': md})
+
+        elif role == 'model':
+            parts = msg.get('parts', [])
+            if not parts:
+                md_list.append({'who': 'bot', 'md': '[空回复或格式错误]'})
+                continue
+
+            md = ''
+            text_buffer = []
+
+            def flush_md_text():
+                nonlocal md, text_buffer
+                if text_buffer:
+                    # 不额外添加换行，直接拼接，保持一句话连续
+                    md += ''.join(text_buffer)
+                    text_buffer = []
+
+            for part in parts:
+                if 'text' in part and part['text']:
+                    text_buffer.append(part['text'])
+                elif 'inline_data' in part:
+                    # 先把已有文本 flush，再插入图片占位
+                    flush_md_text()
+                    mime = part['inline_data'].get('mime_type', 'image/png')
+                    data_b64 = part['inline_data'].get('data', '')
+                    if data_b64:
+                        md += f'\n![ai image](data:{mime};base64,{data_b64[:30]}...)\n'
+
+            flush_md_text()
+            if not md.strip():
+                md = '[空回复]'
+            md_list.append({'who': 'bot', 'md': md})
+
+        else:
+            # 未知角色兜底
+            md_list.append({'who': 'bot', 'md': '[未知消息类型]'})
     return jsonify(md_list)
 
 
