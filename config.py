@@ -40,7 +40,7 @@ try:
         paid_key_path=pathlib.Path("paidkey.txt"),
         db_path=pathlib.Path("api_keys.db"),
         config={
-            'max_free_key_failures': 6,  # 免费密钥连续失败6次后切换到付费
+            'max_free_key_failures': 30,  # 免费密钥连续失败指定次数后切换到付费密钥
             'cooldown_seconds': 300,
             'requests_per_minute': 5,
             'requests_per_day': 100

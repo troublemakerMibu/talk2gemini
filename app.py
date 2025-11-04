@@ -118,7 +118,9 @@ def stream_gemini_response(history, model, tools=None):
 
             with requests.post(url, headers=HEADERS, json=payload, stream=True, timeout=300) as resp:
                 resp.raise_for_status()
-
+                # 保存响应内容,便于debug
+                # with open('content.txt', 'w', encoding='utf-8') as f:
+                #     f.write(resp.text)
                 if 'text/event-stream' not in resp.headers.get('Content-Type', ''):
                     raise ValueError("响应非流式格式，请检查API端点或密钥权限。")
 
