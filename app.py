@@ -1,6 +1,6 @@
 import time
 import markdown2
-import pygetwindow as gw # 截图部分保持不变
+# import pygetwindow as gw # 截图部分保持不变
 import pyautogui
 import tkinter as tk
 import requests
@@ -104,7 +104,6 @@ def stream_gemini_response(history, model, tools=None):
             key_type = "未知"
             if key_status.get('details') and len(key_status['details']) > 0:
                 key_type = key_status['details'][0].get('key_type', '未知')
-
             print(
                 f"正在使用 API Key: {api_key} (尝试 {attempt + 1}/{max_retries})"
                 f"\n当前key层级：{key_type}"
